@@ -977,6 +977,12 @@ ${mediaPlaylistUrl}`;
             );
           }
           break;
+        case "Escape":
+          e.preventDefault();
+          selected_range_index = -1;
+          saveRanges();
+          console.log("Range selection cleared");
+          break;
         case "Enter":
           e.preventDefault();
           {
