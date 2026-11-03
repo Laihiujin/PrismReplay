@@ -78,7 +78,7 @@ async function invoke<T>(
     // if status is 405, it means the command is not allowed
     if (response.status === 405) {
       throw new Error(
-        `Command ${command} is not allowed, maybe ShadowVerse is running in readonly mode or HTTP method mismatch`
+        `Command ${command} is not allowed, maybe PrismReplay is running in readonly mode or HTTP method mismatch`
       );
     }
     if (!response.ok) {

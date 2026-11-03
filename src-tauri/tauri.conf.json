@@ -17,10 +17,10 @@
     "targets": "all",
     "resources": [],
     "macOS": {
-      "minimumSystemVersion": "10.15"
+      "minimumSystemVersion": "13.3"
     }
   },
-  "productName": "ShadowVerse",
+  "productName": "PrismReplay",
   "version": "../package.json",
   "identifier": "cn.ShadowVerse",
   "plugins": {

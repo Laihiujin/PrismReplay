@@ -1,10 +1,10 @@
-# ShadowVerse
+# PrismReplay
 
-[![Build](https://img.shields.io/github/actions/workflow/status/Laihiujin/ShadowVerse/main.yml?label=Build)](../../actions)
-[![Release](https://img.shields.io/github/v/release/Laihiujin/ShadowVerse)](../../releases)
+[![Build](https://img.shields.io/github/actions/workflow/status/Laihiujin/PrismReplay/main.yml?label=Build)](../../actions)
+[![Release](https://img.shields.io/github/v/release/Laihiujin/PrismReplay)](../../releases)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
-[ShadowVerse](https://github.com/Laihiujin/ShadowVerse) 是一个可视化矩阵直播录制的切片工具，支持B站、抖音、快手、虎牙、tiktok，及全平台内置浏览器登录、逆向工程二维码登录、访客模式（无需登录即可录播）、重载以往缓存直播记录；
+[PrismReplay](https://github.com/Laihiujin/PrismReplay) 是一个可视化矩阵直播录制的切片工具，支持B站、抖音、快手、虎牙、tiktok，及全平台内置浏览器登录、逆向工程二维码登录、访客模式（无需登录即可录播）、重载以往缓存直播记录；
 
 ## 支持平台
 
@@ -62,9 +62,9 @@
 
 | 文件 | 说明 |
 |---|---|
-| `ShadowVerse_x.y.z_x64-setup.exe` | Windows |
-| `ShadowVerse_x.y.z_aarch64.dmg` | macOS Apple Silicon |
-| `ShadowVerse_x.y.z_x86_64.dmg` | macOS Intel |
+| `PrismReplay_x.y.z_x64-setup.exe` | Windows |
+| `PrismReplay_x.y.z_aarch64.dmg` | macOS Apple Silicon |
+| `PrismReplay_x.y.z_x86_64.dmg` | macOS Intel |
 
 ## 致谢
 
