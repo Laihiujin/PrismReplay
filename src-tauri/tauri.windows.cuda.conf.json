@@ -1,5 +1,6 @@
 {
   "productName": "PrismReplay-CUDA",
+  "mainBinaryName": "prismreplay",
   "app": {
     "windows": [
       {

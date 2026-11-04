@@ -1,5 +1,6 @@
 {
   "productName": "PrismReplay-CPU",
+  "mainBinaryName": "prismreplay",
   "app": {
     "windows": [
       {
