@@ -31,6 +31,46 @@
   let previews: Record<string, string> = {};
   let typedNames: Record<string, string> = {};
 
+  interface Monitor {
+    running: boolean;
+    host: string;
+    interval_mins: number;
+    message: string;
+    last_check_ms: number;
+  }
+  let monitor: Monitor | null = null;
+  let monitorHost = "";
+  let monitorMinutes = 5;
+  let monitorTimer: ReturnType<typeof setInterval> | null = null;
+
+  async function refreshMonitor() {
+    try {
+      monitor = (await invoke("wechat_monitor_status")) as Monitor;
+      if (monitor.host && !monitorHost) monitorHost = monitor.host;
+    } catch (e) {
+      monitor = null;
+    }
+  }
+
+  async function startMonitor() {
+    error = "";
+    try {
+      await invoke("wechat_monitor_start", { host: monitorHost, intervalMins: Number(monitorMinutes) });
+    } catch (e) {
+      error = String(e);
+    }
+    await refreshMonitor();
+  }
+
+  async function stopMonitor() {
+    try {
+      await invoke("wechat_monitor_stop");
+    } catch (e) {
+      error = String(e);
+    }
+    await refreshMonitor();
+  }
+
   function loadPreviews(candidates: Candidate[]) {
     for (const candidate of candidates) {
       if (candidate.url in previews) continue;
@@ -102,11 +142,21 @@
     return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
   }
 
-  onMount(refresh);
+  onMount(() => {
+    refresh();
+    refreshMonitor();
+    monitorTimer = setInterval(() => {
+      refreshMonitor();
+      // Monitoring starts captures on its own, so keep the capture state in view.
+      if (monitor?.running) refresh();
+    }, 3000);
+  });
   onDestroy(() => {
     if (timer) clearInterval(timer);
+    if (monitorTimer) clearInterval(monitorTimer);
     // Leaving this dialog must never leave the system proxy pointing at us.
-    if (status?.running) invoke("wechat_capture_stop").catch(() => {});
+    // Monitoring keeps running in the background and manages its own capture.
+    if (status?.running && !monitor?.running) invoke("wechat_capture_stop").catch(() => {});
   });
 </script>
 
@@ -187,6 +237,32 @@
           <p class="mt-1 break-all">{status.json_endpoints.join("  ")}</p>
         </details>
       {/if}
+    {/if}
+
+    {#if status.ca_installed}
+      <div class="border-t border-gray-200 dark:border-gray-700 pt-2 space-y-1.5 text-xs">
+        <div class="font-medium text-gray-900 dark:text-white">监控主播开播</div>
+        <p>
+          先在电脑版微信搜索主播名字，并停在“名字 - 搜一搜”这个标签页。开播后会自动进入直播间并开始录制。微信要一直开着，频繁自动操作可能触发风控。
+        </p>
+        <div class="flex items-center gap-2">
+          <input class="min-w-0 flex-1 rounded bg-white dark:bg-[#2c2c2e] px-2 py-1 text-gray-900 dark:text-white"
+            placeholder="主播名字，如 新华网" bind:value={monitorHost} disabled={monitor?.running} />
+          <input class="w-14 rounded bg-white dark:bg-[#2c2c2e] px-2 py-1 text-gray-900 dark:text-white"
+            type="number" min="5" title="检查间隔（分钟），最少 5 分钟" bind:value={monitorMinutes} disabled={monitor?.running} />
+          <span>分钟</span>
+          {#if monitor?.running}
+            <button class="shrink-0 px-3 py-1 rounded-md text-gray-600 dark:text-gray-400 hover:underline" on:click={stopMonitor}>停止监控</button>
+          {:else}
+            <button class="shrink-0 px-3 py-1 rounded-md bg-blue-600 text-white disabled:opacity-50" disabled={!monitorHost.trim()} on:click={startMonitor}>开始监控</button>
+          {/if}
+        </div>
+        {#if monitor?.message}
+          <p class="text-gray-500 dark:text-gray-400">
+            {monitor.host}：{monitor.message}{monitor.last_check_ms ? `（${new Date(monitor.last_check_ms).toLocaleTimeString()}）` : ""}
+          </p>
+        {/if}
+      </div>
     {/if}
 
     {#if error}

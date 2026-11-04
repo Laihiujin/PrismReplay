@@ -844,6 +844,9 @@ fn setup_invoke_handlers(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         crate::handlers::wechat_capture::wechat_capture_start,
         crate::handlers::wechat_capture::wechat_capture_stop,
         crate::handlers::wechat_capture::wechat_capture_preview,
+        crate::handlers::wechat_monitor::wechat_monitor_status,
+        crate::handlers::wechat_monitor::wechat_monitor_start,
+        crate::handlers::wechat_monitor::wechat_monitor_stop,
         crate::handlers::recorder::remove_recorder,
         crate::handlers::recorder::reload_recorder,
         crate::handlers::recorder::get_room_info,
@@ -937,6 +940,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Repairs the system proxy if the previous run ended while capturing.
             recorder::platforms::wechat::capture::recover_after_crash(&capture_dir);
             app.manage(recorder::platforms::wechat::capture::WechatCapture::new(capture_dir));
+            app.manage(std::sync::Arc::new(
+                crate::handlers::wechat_monitor::WechatMonitor::default(),
+            ));
             tauri::async_runtime::block_on(async {
                 let state = setup_app_state(app).await?;
                 let _ = tray::create_tray(app.handle());

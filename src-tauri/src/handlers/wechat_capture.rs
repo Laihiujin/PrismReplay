@@ -35,10 +35,15 @@ pub async fn wechat_capture_preview(
     capture: CaptureState<'_>,
     url: String,
 ) -> Result<String, String> {
-    use base64::Engine;
     if !capture.knows_stream(&url) {
         return Err("这个地址不是本次抓取到的".into());
     }
+    grab_frame(&url).await
+}
+
+/// Grabs one frame of a stream as a JPEG data URL.
+pub async fn grab_frame(url: &str) -> Result<String, String> {
+    use base64::Engine;
     let mut command = tokio::process::Command::new(crate::ffmpeg::ffmpeg_path());
     #[cfg(windows)]
     command.creation_flags(0x0800_0000);
@@ -51,7 +56,7 @@ pub async fn wechat_capture_preview(
             "-headers",
             "Referer: https://channels.weixin.qq.com/\r\nUser-Agent: Mozilla/5.0\r\n",
             "-i",
-            &url,
+            url,
             "-frames:v",
             "1",
             "-vf",
