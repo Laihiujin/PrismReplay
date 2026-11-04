@@ -166,6 +166,42 @@ fn find_room(value: &Value, live_id: &str, found: &mut Option<RoomInfo>) -> bool
     }
 }
 
+/// WeChat names the page of an open live room "<host>的直播".
+fn host_from_document_name(name: &str) -> Option<String> {
+    name.trim()
+        .strip_suffix("的直播")
+        .map(str::trim)
+        .filter(|host| !host.is_empty())
+        .map(|host| host.chars().take(60).collect())
+}
+
+/// Reads the page names of WeChat's visible room tab. Only document names are requested, so chat
+/// contents are not read. Windows-only and best effort: any failure just leaves the name empty.
+#[cfg(windows)]
+fn visible_room_host() -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    const SCRIPT: &str = r#"
+[Console]::OutputEncoding=[Text.Encoding]::UTF8
+Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+$condition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ControlTypeProperty,[Windows.Automation.ControlType]::Document)
+foreach ($process in Get-Process Weixin -ErrorAction Stop) {
+  if ($process.MainWindowHandle -eq 0) { continue }
+  $root = [Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
+  foreach ($document in $root.FindAll([Windows.Automation.TreeScope]::Descendants,$condition)) {
+    if (-not $document.Current.IsOffscreen) { $document.Current.Name }
+  }
+}
+"#;
+    let output = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+        .creation_flags(0x0800_0000)
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(host_from_document_name)
+}
+
 fn extract_rooms(text: &str) -> Vec<(String, RoomInfo)> {
     let ids: BTreeSet<&str> = live_id_regex().find_iter(text).map(|m| m.as_str()).take(20).collect();
     if ids.is_empty() {
@@ -194,6 +230,26 @@ impl Shared {
             suffixes,
             findings: StdMutex::new(Findings::default()),
         })
+    }
+
+    /// A stream first seen moments ago belongs to the room the user just opened. Older streams
+    /// are left unnamed rather than risk naming them after a room opened later.
+    fn name_recent_streams(&self, host: &str) {
+        const RECENT_MS: i64 = 30_000;
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut findings = self.findings.lock().unwrap();
+        let recent: Vec<String> = findings
+            .candidates
+            .iter()
+            .filter(|item| now - item.seen_at_ms <= RECENT_MS)
+            .filter_map(|item| live_id_of(&item.url))
+            .collect();
+        for id in recent {
+            findings.rooms.entry(id).or_insert_with(|| RoomInfo {
+                name: host.to_string(),
+                title: Some(format!("{host}的直播")),
+            });
+        }
     }
 
     fn reset(&self) {
@@ -699,6 +755,14 @@ pub fn recover_after_crash(_dir: &Path) {}
 
 // --- service -----------------------------------------------------------------------------------
 
+struct AbortOnDrop(JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 struct Running {
     port: u16,
     shutdown: oneshot::Sender<()>,
@@ -885,8 +949,26 @@ impl WechatCapture {
                 return Err(error);
             }
         };
+        let namer_shared = self.shared.clone();
         let this = self.clone();
         let watchdog = tokio::spawn(async move {
+            let namer = tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    let has_streams = !namer_shared.findings.lock().unwrap().candidates.is_empty();
+                    if !has_streams {
+                        continue;
+                    }
+                    let host = tokio::task::spawn_blocking(visible_room_host)
+                        .await
+                        .ok()
+                        .flatten();
+                    if let Some(host) = host {
+                        namer_shared.name_recent_streams(&host);
+                    }
+                }
+            });
+            let _abort_namer = AbortOnDrop(namer);
             tokio::time::sleep(CAPTURE_TIMEOUT).await;
             if let Err(error) = this.stop().await {
                 log::warn!("Failed to stop WeChat capture after timeout: {error}");
@@ -1103,6 +1185,25 @@ mod tests {
     }
 
     const GZIP_ROOM_JSON: &str = "H4sIAAAAAAAC/6tWSkksSVSyUqhWystMzs5LzE0FcpTSqzILdIvy83OVdBSUcjLLUkMyS3IQMiVgHlCquKQoNTEXJJ5RUlJQbKWvn5OfnJiTkV9cog/SFm8EA/EVemk5ZUq1tQBDTOD2cgAAAA==";
+
+    #[test]
+    fn host_name_is_read_from_the_room_page_title() {
+        assert_eq!(host_from_document_name("新华网的直播").as_deref(), Some("新华网"));
+        assert_eq!(host_from_document_name("的直播"), None);
+        assert_eq!(host_from_document_name("视频号"), None);
+    }
+
+    #[test]
+    fn only_recently_seen_streams_take_the_visible_room_name() {
+        let shared = Shared::new(vec![]);
+        shared.note_stream("https://a/live_111111111.flv", "a", "flv");
+        shared.note_stream("https://a/live_222222222.flv", "a", "flv");
+        shared.findings.lock().unwrap().candidates[1].seen_at_ms -= 60_000;
+        shared.name_recent_streams("host");
+        let findings = shared.findings.lock().unwrap();
+        assert_eq!(findings.rooms["live_222222222"].name, "host");
+        assert!(!findings.rooms.contains_key("live_111111111"));
+    }
 
     #[test]
     fn room_details_come_only_from_objects_mentioning_the_stream() {

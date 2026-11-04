@@ -253,6 +253,7 @@
     cover_last_key.set(room_id, next_key);
   }
   async function get_image_url(room_id: string, url: string) {
+    if (url.startsWith("data:")) return url;
     const cache_key = build_cover_cache_key(room_id, url);
     if (image_cache.has(cache_key)) {
       return image_cache.get(cache_key);

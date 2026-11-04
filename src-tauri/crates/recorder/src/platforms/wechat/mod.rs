@@ -63,12 +63,12 @@ impl WechatRecorder {
                 platform: "wechat".into(),
                 room_id: room_id.into(),
                 room_title: source.title.clone(),
-                room_cover: String::new(),
+                room_cover: source.cover.clone().unwrap_or_default(),
                 status: false,
             })),
             user_info: Arc::new(RwLock::new(UserInfo {
                 user_id: room_id.into(),
-                user_name: "视频号".into(),
+                user_name: source.name.clone().unwrap_or_else(|| "视频号".into()),
                 user_avatar: String::new(),
             })),
             platform_live_id: Arc::new(RwLock::new(room_id.into())),
@@ -86,6 +86,9 @@ impl WechatRecorder {
     async fn capture(&self, live_id: &str) -> Result<(), RecorderError> {
         let work_dir = self.work_dir(live_id).await;
         tokio::fs::create_dir_all(work_dir.full_path()).await?;
+        if let Some(cover) = self.extra.source.cover_jpeg() {
+            let _ = tokio::fs::write(work_dir.with_filename("cover.jpg").full_path(), cover).await;
+        }
         *self.danmu_storage.write().await =
             DanmuStorage::new(&work_dir.with_filename("danmu.txt").full_path()).await;
         let mut headers = reqwest::header::HeaderMap::new();

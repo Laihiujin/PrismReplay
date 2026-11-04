@@ -29,6 +29,7 @@
   let finishedWithoutResult = false;
   // A failed preview is remembered so that a dead stream is not retried on every refresh.
   let previews: Record<string, string> = {};
+  let typedNames: Record<string, string> = {};
 
   function loadPreviews(candidates: Candidate[]) {
     for (const candidate of candidates) {
@@ -83,12 +84,15 @@
   }
 
   async function choose(candidate: Candidate) {
+    const name = (typedNames[candidate.url] ?? "").trim() || candidate.room_name || undefined;
     await run("wechat_capture_stop");
     dispatch(
       "select",
       JSON.stringify({
         url: candidate.url,
-        title: candidate.room_title || candidate.room_name || "视频号直播",
+        title: candidate.room_title || name || "视频号直播",
+        name,
+        cover: previews[candidate.url]?.startsWith("data:") ? previews[candidate.url] : undefined,
         captured_stream: true,
       }),
     );
@@ -166,6 +170,11 @@
                 <div class="truncate" title={candidate.room_title}>{candidate.room_title}</div>
               {/if}
               <div class="truncate text-gray-500 dark:text-gray-400" title={candidate.host}>{candidate.kind.toUpperCase()}{quality(candidate)} · {candidate.host}</div>
+              <input
+                class="mt-1 w-full rounded bg-[#f5f5f7] dark:bg-[#1c1c1e] px-1.5 py-0.5 text-xs text-gray-900 dark:text-white placeholder-gray-500"
+                placeholder={candidate.room_name ? `名字：${candidate.room_name}` : "直播间名字（可选）"}
+                bind:value={typedNames[candidate.url]}
+              />
             </div>
             <button class="shrink-0 px-2 py-1 text-xs rounded-md bg-blue-600 text-white disabled:opacity-50" disabled={busy}
               on:click={() => choose(candidate)}>使用这个</button>

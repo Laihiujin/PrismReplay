@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
 
+const COVER_PREFIX: &str = "data:image/jpeg;base64,";
+const MAX_COVER_LEN: usize = 100_000;
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct WechatSource {
     pub url: String,
@@ -11,6 +14,12 @@ pub struct WechatSource {
     /// Observed as a live stream by the capture proxy, so its path need not end in an extension.
     #[serde(default)]
     pub captured_stream: bool,
+    /// Host name shown on the room card.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// JPEG data URL of a frame from the stream, used as the room cover.
+    #[serde(default)]
+    pub cover: Option<String>,
 }
 
 impl WechatSource {
@@ -20,6 +29,8 @@ impl WechatSource {
             return Err("请粘贴视频号媒体直链或单条资源 JSON（不超过 128KB）".into());
         }
         let mut captured_stream = false;
+        let mut name = None;
+        let mut cover = None;
         let (raw_url, title) = if input.starts_with('{') {
             let value: Value = serde_json::from_str(input)
                 .map_err(|_| "资源 JSON 无效，请复制单条资源对象".to_string())?;
@@ -27,6 +38,17 @@ impl WechatSource {
                 .get("captured_stream")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            name = value
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(|text| text.chars().take(60).collect());
+            cover = value
+                .get("cover")
+                .and_then(Value::as_str)
+                .filter(|text| text.starts_with(COVER_PREFIX) && text.len() <= MAX_COVER_LEN)
+                .map(str::to_string);
             let desc = value
                 .pointer("/data/object/objectDesc")
                 .or_else(|| value.get("objectDesc"))
@@ -99,10 +121,19 @@ impl WechatSource {
             url: raw_url,
             title: title.chars().take(160).collect(),
             captured_stream,
+            name,
+            cover,
         })
     }
 
     /// Keep signed query strings out of room IDs, paths, logs and notifications.
+    /// The cover as JPEG bytes, for saving next to the recording.
+    pub fn cover_jpeg(&self) -> Option<Vec<u8>> {
+        use base64::Engine;
+        let data = self.cover.as_deref()?.strip_prefix(COVER_PREFIX)?;
+        base64::engine::general_purpose::STANDARD.decode(data).ok()
+    }
+
     pub fn room_id(&self) -> String {
         let base = self.url.split('?').next().unwrap_or(&self.url);
         format!("wx_{:x}", md5::compute(base))
@@ -162,6 +193,16 @@ mod tests {
         assert!(WechatSource::parse(r#"{"url":"https://evil.test/stream","captured_stream":true}"#).is_err());
         // Without the capture flag an extensionless URL is still rejected.
         assert!(WechatSource::parse("https://live.video.qq.com/stream?sig=1").is_err());
+    }
+
+    #[test]
+    fn name_and_cover_survive_saving_and_bad_covers_are_dropped() {
+        let input = r#"{"url":"https://a.wxlivecdn.com/s.flv","title":"t","name":" 新华网 ","cover":"data:image/jpeg;base64,/9j/"}"#;
+        let saved = WechatSource::parse(&WechatSource::parse(input).unwrap().to_extra().unwrap()).unwrap();
+        assert_eq!(saved.name.as_deref(), Some("新华网"));
+        assert_eq!(saved.cover_jpeg().unwrap(), vec![0xff, 0xd8, 0xff]);
+        let bad = r#"{"url":"https://a.wxlivecdn.com/s.flv","cover":"https://evil.test/x.jpg"}"#;
+        assert!(WechatSource::parse(bad).unwrap().cover.is_none());
     }
 
     #[test]

@@ -55,7 +55,7 @@ pub async fn wechat_capture_preview(
             "-frames:v",
             "1",
             "-vf",
-            "scale=-2:160",
+            "scale=-2:360",
             "-f",
             "image2pipe",
             "-c:v",
