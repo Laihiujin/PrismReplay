@@ -10,4 +10,4 @@ pub const API_PORT: u16 = 3000;
 #[cfg(feature = "isolated-build")]
 pub const APP_DATA_ID: &str = "cn.prismreplay.localbuild";
 #[cfg(not(feature = "isolated-build"))]
-pub const APP_DATA_ID: &str = "cn.ShadowVerse";
+pub const APP_DATA_ID: &str = "cn.prismreplay";
