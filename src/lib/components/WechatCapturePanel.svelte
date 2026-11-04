@@ -37,10 +37,14 @@
     interval_mins: number;
     message: string;
     last_check_ms: number;
+    last_change_ms: number;
+    live_state: string;
+    auto_record: boolean;
   }
   let monitor: Monitor | null = null;
   let monitorHost = "";
   let monitorMinutes = 5;
+  let monitorAutoRecord = false;
   let monitorTimer: ReturnType<typeof setInterval> | null = null;
 
   async function refreshMonitor() {
@@ -55,7 +59,7 @@
   async function startMonitor() {
     error = "";
     try {
-      await invoke("wechat_monitor_start", { host: monitorHost, intervalMins: Number(monitorMinutes) });
+      await invoke("wechat_monitor_start", { host: monitorHost, intervalMins: Number(monitorMinutes), autoRecord: monitorAutoRecord });
     } catch (e) {
       error = String(e);
     }
@@ -239,15 +243,14 @@
       {/if}
     {/if}
 
-    {#if status.ca_installed}
       <div class="border-t border-gray-200 dark:border-gray-700 pt-2 space-y-1.5 text-xs">
-        <div class="font-medium text-gray-900 dark:text-white">监控主播开播</div>
+        <div class="font-medium text-gray-900 dark:text-white">跟踪指定视频号</div>
         <p>
-          先在电脑版微信搜索主播名字，并停在“名字 - 搜一搜”这个标签页。开播后会自动进入直播间并开始录制。微信要一直开着，频繁自动操作可能触发风控。
+          在电脑版微信搜索目标账号的完整显示名，例如“陈赫”而不是“陈赫工作室”。保留搜索标签，监控会尝试自动选中它；可能短暂切换微信标签。默认只检查状态，不抓包、不改系统代理、不安装证书。页面读不到或同名结果不明确时显示“无法确认”，不会当作未开播。
         </p>
         <div class="flex items-center gap-2">
           <input class="min-w-0 flex-1 rounded bg-white dark:bg-[#2c2c2e] px-2 py-1 text-gray-900 dark:text-white"
-            placeholder="主播名字，如 新华网" bind:value={monitorHost} disabled={monitor?.running} />
+            placeholder="目标完整显示名，如 陈赫" bind:value={monitorHost} disabled={monitor?.running} />
           <input class="w-14 rounded bg-white dark:bg-[#2c2c2e] px-2 py-1 text-gray-900 dark:text-white"
             type="number" min="5" title="检查间隔（分钟），最少 5 分钟" bind:value={monitorMinutes} disabled={monitor?.running} />
           <span>分钟</span>
@@ -257,13 +260,17 @@
             <button class="shrink-0 px-3 py-1 rounded-md bg-blue-600 text-white disabled:opacity-50" disabled={!monitorHost.trim()} on:click={startMonitor}>开始监控</button>
           {/if}
         </div>
+        <label class="flex items-center gap-2">
+          <input type="checkbox" bind:checked={monitorAutoRecord} disabled={monitor?.running || !status.ca_installed} />
+          开播后自动抓流录制（可选，需您先安装抓取证书）
+        </label>
+        <p class="text-gray-500 dark:text-gray-400">仅按完整显示名匹配，不是永久账号 ID；同名账号需人工核对。检查间隔至少 5 分钟，软件和微信需保持运行。</p>
         {#if monitor?.message}
           <p class="text-gray-500 dark:text-gray-400">
             {monitor.host}：{monitor.message}{monitor.last_check_ms ? `（${new Date(monitor.last_check_ms).toLocaleTimeString()}）` : ""}
           </p>
         {/if}
       </div>
-    {/if}
 
     {#if error}
       <p class="text-xs text-red-600 dark:text-red-500">{error}</p>

@@ -18,86 +18,88 @@ const QUALITY_SETTLE: Duration = Duration::from_secs(5);
 
 /// Prints one line: NOPAGE, or LIVE <item name> for each live result, or nothing if none is live.
 #[cfg(windows)]
-const SEARCH_PAGE_SCRIPT: &str = r#"
-[Console]::OutputEncoding=[Text.Encoding]::UTF8
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
-$keyword = $env:WECHAT_MONITOR_KEYWORD
-$pageName = $keyword + ' - ' + [char]0x641C + [char]0x4E00 + [char]0x641C
-$searchLabel = [string][char]0x641C + [char]0x7D22
-$liveLabel = [string][char]0x76F4 + [char]0x64AD + [char]0x4E2D
-function ByType($type) { New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ControlTypeProperty,$type) }
-$descendants = [Windows.Automation.TreeScope]::Descendants
-$page = $null
-foreach ($process in Get-Process Weixin -ErrorAction Stop) {
-  if ($process.MainWindowHandle -eq 0) { continue }
-  $root = [Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
-  foreach ($document in $root.FindAll($descendants,(ByType ([Windows.Automation.ControlType]::Document)))) {
-    if ($document.Current.Name -eq $pageName) { $page = $document }
-  }
-}
-if ($page -eq $null) { 'NOPAGE'; exit }
-function LiveItems { foreach ($item in $page.FindAll($descendants,(ByType ([Windows.Automation.ControlType]::ListItem)))) { if ($item.Current.Name.StartsWith($liveLabel) -and $item.Current.Name.TrimEnd().EndsWith($keyword)) { $item } } }
-if ($env:WECHAT_MONITOR_REFRESH -eq '1') {
-  foreach ($button in $page.FindAll($descendants,(ByType ([Windows.Automation.ControlType]::Button)))) {
-    if ($button.Current.Name -eq $searchLabel) { $button.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke(); Start-Sleep -Seconds 3; break }
-  }
-}
-foreach ($item in LiveItems) {
-  'LIVE ' + $item.Current.Name
-  if ($env:WECHAT_MONITOR_ENTER -eq '1') { $item.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke() }
-  break
-}
-"#;
+const SEARCH_PAGE_SCRIPT: &str = include_str!("wechat_monitor_search.ps1");
 
 #[derive(Debug, PartialEq)]
 enum PageState {
     NoPage,
+    Unknown,
+    AccountNotFound,
+    Ambiguous,
     Offline,
     Live { title: Option<String> },
 }
 
-/// A result reads "直播中 , 6.6万人看过 <topic> <host>".
+// Explicitly scoped records only. Empty output, missing accounts and ambiguous
+// names must never silently become "offline".
 fn parse_page_output(output: &str, host: &str) -> PageState {
-    let mut state = PageState::Offline;
-    for line in output.lines().map(str::trim) {
-        if line == "NOPAGE" {
-            return PageState::NoPage;
+    let mut result = None;
+    for line in output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let next = match line {
+            "NOPAGE" => PageState::NoPage,
+            "NOTFOUND" => PageState::AccountNotFound,
+            "AMBIGUOUS" => PageState::Ambiguous,
+            "UNREADABLE" | "REFRESH_FAILED" => PageState::Unknown,
+            _ => {
+                let parts: Vec<_> = line.splitn(3, '\t').collect();
+                if parts.len() >= 2 && parts[1] == host {
+                    match parts[0] {
+                        "OFFLINE" if parts.len() == 2 => PageState::Offline,
+                        "LIVE" => PageState::Live {
+                            title: parts
+                                .get(2)
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty()),
+                        },
+                        _ => PageState::Unknown,
+                    }
+                } else {
+                    PageState::Unknown
+                }
+            }
+        };
+        if result.is_some() {
+            return PageState::Ambiguous;
         }
-        if let Some(item) = line.strip_prefix("LIVE ") {
-            let middle = item.strip_suffix(host).unwrap_or(item).trim();
-            let title = middle
-                .split(' ')
-                .filter(|part| !part.is_empty() && *part != "," && !part.starts_with("直播中"))
-                .filter(|part| !part.ends_with("看过"))
-                .collect::<Vec<_>>()
-                .join(" ");
-            state = PageState::Live {
-                title: Some(title).filter(|title| !title.is_empty()),
-            };
-        }
+        result = Some(next);
     }
-    state
+    result.unwrap_or(PageState::Unknown)
 }
 
 #[cfg(windows)]
-fn read_search_page(host: &str, refresh: bool, enter: bool) -> Result<PageState, String> {
-    use std::os::windows::process::CommandExt;
-    let output = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", SEARCH_PAGE_SCRIPT])
+async fn read_search_page(host: &str, refresh: bool, enter: bool) -> Result<PageState, String> {
+    let mut command = tokio::process::Command::new("powershell.exe");
+    command
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            SEARCH_PAGE_SCRIPT,
+        ])
         .env("WECHAT_MONITOR_KEYWORD", host)
         .env("WECHAT_MONITOR_REFRESH", if refresh { "1" } else { "0" })
         .env("WECHAT_MONITOR_ENTER", if enter { "1" } else { "0" })
         .creation_flags(0x0800_0000)
-        .output()
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(Duration::from_secs(20), command.output())
+        .await
+        .map_err(|_| "读取微信页面超时，当前状态无法确认".to_string())?
         .map_err(|e| format!("无法读取微信页面：{e}"))?;
     if !output.status.success() {
-        return Err("没有找到正在运行的电脑版微信".into());
+        return Err("无法读取电脑版微信，当前状态无法确认".into());
     }
-    Ok(parse_page_output(&String::from_utf8_lossy(&output.stdout), host))
+    Ok(parse_page_output(
+        &String::from_utf8_lossy(&output.stdout),
+        host,
+    ))
 }
 
 #[cfg(not(windows))]
-fn read_search_page(_host: &str, _refresh: bool, _enter: bool) -> Result<PageState, String> {
+async fn read_search_page(_host: &str, _refresh: bool, _enter: bool) -> Result<PageState, String> {
     Err("只支持 Windows".into())
 }
 
@@ -132,6 +134,9 @@ pub struct MonitorStatus {
     pub interval_mins: u64,
     pub message: String,
     pub last_check_ms: i64,
+    pub last_change_ms: i64,
+    pub live_state: String,
+    pub auto_record: bool,
 }
 
 #[derive(Default)]
@@ -141,10 +146,15 @@ pub struct WechatMonitor {
 }
 
 impl WechatMonitor {
-    fn say(&self, message: impl Into<String>) {
+    fn say_state(&self, state: &str, message: impl Into<String>) {
         let mut status = self.status.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        if status.live_state != state {
+            status.last_change_ms = now;
+        }
+        status.live_state = state.into();
         status.message = message.into();
-        status.last_check_ms = chrono::Utc::now().timestamp_millis();
+        status.last_check_ms = now;
     }
 }
 
@@ -156,14 +166,9 @@ async fn record_live_room(
     title: Option<String>,
 ) -> Result<String, String> {
     capture.start().await?;
-    let entered = {
-        let host = host.to_string();
-        tokio::task::spawn_blocking(move || read_search_page(&host, false, true))
-            .await
-            .map_err(|e| e.to_string())
-    };
+    let entered = read_search_page(host, false, true).await;
     let stream = match entered {
-        Ok(Ok(PageState::Live { .. })) => wait_for_stream(capture).await,
+        Ok(PageState::Live { .. }) => wait_for_stream(capture).await,
         _ => None,
     };
     // Always give the system proxy back before anything else can fail.
@@ -180,14 +185,9 @@ async fn record_live_room(
     .to_string();
     let room_id = WechatSource::parse(&extra)?.room_id();
     let state = app.state::<State>();
-    crate::handlers::recorder::add_recorder(
-        state,
-        "wechat".to_string(),
-        String::new(),
-        extra,
-    )
-    .await
-    .map_err(|e| format!("添加录制失败：{e}"))?;
+    crate::handlers::recorder::add_recorder(state, "wechat".to_string(), String::new(), extra)
+        .await
+        .map_err(|e| format!("添加录制失败：{e}"))?;
     Ok(room_id)
 }
 
@@ -205,31 +205,52 @@ async fn wait_until_recording_ends(app: &AppHandle, room_id: &str) {
     }
 }
 
-async fn monitor_loop(app: AppHandle, monitor: Arc<WechatMonitor>, host: String, interval: u64) {
+async fn monitor_loop(
+    app: AppHandle,
+    monitor: Arc<WechatMonitor>,
+    host: String,
+    interval: u64,
+    auto_record: bool,
+) {
     let capture = app.state::<Arc<WechatCapture>>().inner().clone();
     loop {
-        let page = {
-            let host = host.clone();
-            tokio::task::spawn_blocking(move || read_search_page(&host, true, false)).await
-        };
+        let page = read_search_page(&host, true, false).await;
         match page {
-            Ok(Ok(PageState::NoPage)) => monitor.say(format!(
-                "没找到页面：请在电脑版微信搜索“{host}”，并停在“{host} - 搜一搜”这个标签页"
-            )),
-            Ok(Ok(PageState::Offline)) => monitor.say("未开播"),
-            Ok(Ok(PageState::Live { title })) => {
-                monitor.say("已开播，正在进入直播间并抓取…");
-                match record_live_room(&app, &capture, &host, title).await {
-                    Ok(room_id) => {
-                        monitor.say("正在录制");
-                        wait_until_recording_ends(&app, &room_id).await;
-                        monitor.say("录制已结束，请切回搜索标签页以继续监控");
+            Ok(PageState::NoPage) => monitor.say_state(
+                "unknown",
+                format!("无法确认：请打开“{host} - 搜一搜”标签；监控会尝试自动选中它"),
+            ),
+            Ok(PageState::Unknown) => {
+                monitor.say_state("unknown", "无法确认：页面未完成读取或刷新，请检查微信窗口")
+            }
+            Ok(PageState::AccountNotFound) => {
+                monitor.say_state("unknown", "无法确认：搜索结果里没有完整名称匹配的目标账号")
+            }
+            Ok(PageState::Ambiguous) => monitor.say_state(
+                "unknown",
+                "无法确认：存在多个同名结果，请在微信中核对目标账号",
+            ),
+            Ok(PageState::Offline) => {
+                monitor.say_state("offline", "已找到完整名称匹配的账号，未检测到开播标记")
+            }
+            Ok(PageState::Live { title }) => {
+                monitor.say_state("live", "已检测到目标账号直播中");
+                if auto_record {
+                    monitor.say_state("live", "已开播，正在进入目标直播间并抓取…");
+                    match record_live_room(&app, &capture, &host, title).await {
+                        Ok(room_id) => {
+                            monitor.say_state("recording", "正在录制目标直播间");
+                            wait_until_recording_ends(&app, &room_id).await;
+                            monitor
+                                .say_state("unknown", "录制结束，将重新选择目标搜索标签继续监控");
+                        }
+                        Err(error) => {
+                            monitor.say_state("live", format!("已检测到开播，但没有录上：{error}"))
+                        }
                     }
-                    Err(error) => monitor.say(format!("这次没有录上：{error}")),
                 }
             }
-            Ok(Err(error)) => monitor.say(error),
-            Err(error) => monitor.say(error.to_string()),
+            Err(error) => monitor.say_state("unknown", error),
         }
         tokio::time::sleep(Duration::from_secs(interval * 60)).await;
     }
@@ -248,15 +269,27 @@ pub async fn wechat_monitor_start(
     monitor: MonitorState<'_>,
     host: String,
     interval_mins: u64,
+    auto_record: Option<bool>,
 ) -> Result<(), String> {
     let host = host.trim().to_string();
-    if host.is_empty() {
-        return Err("请填写主播名字".into());
+    if host.is_empty() || host.chars().count() > 80 || host.chars().any(char::is_control) {
+        return Err("请填写目标账号的完整显示名（1–80 字，不含控制字符）".into());
     }
-    let interval = interval_mins.max(MIN_INTERVAL_MINS);
+    let auto_record = auto_record.unwrap_or(false);
+    if auto_record {
+        let capture = app.state::<Arc<WechatCapture>>();
+        if !capture.status().await?.ca_installed {
+            return Err("自动录制需先由您确认安装抓取证书；仅状态监控不需要证书".into());
+        }
+    }
+    let interval = interval_mins.clamp(MIN_INTERVAL_MINS, 1440);
     let monitor = monitor.inner().clone();
+    let previous_auto_record = monitor.status.lock().unwrap().auto_record;
     if let Some(task) = monitor.task.lock().unwrap().take() {
         task.abort();
+    }
+    if previous_auto_record {
+        app.state::<Arc<WechatCapture>>().stop().await?;
     }
     *monitor.status.lock().unwrap() = MonitorStatus {
         running: true,
@@ -264,8 +297,17 @@ pub async fn wechat_monitor_start(
         interval_mins: interval,
         message: "正在检查…".into(),
         last_check_ms: 0,
+        last_change_ms: 0,
+        live_state: "unknown".into(),
+        auto_record,
     };
-    let task = tokio::spawn(monitor_loop(app, monitor.clone(), host, interval));
+    let task = tokio::spawn(monitor_loop(
+        app,
+        monitor.clone(),
+        host,
+        interval,
+        auto_record,
+    ));
     *monitor.task.lock().unwrap() = Some(task);
     Ok(())
 }
@@ -278,36 +320,86 @@ pub async fn wechat_monitor_stop(
     if let Some(task) = monitor.task.lock().unwrap().take() {
         task.abort();
     }
-    {
+    let auto_record = {
         let mut status = monitor.status.lock().unwrap();
         status.running = false;
+        status.live_state = "stopped".into();
         status.message = "已停止".into();
-    }
+        status.auto_record
+    };
     // A check aborted mid-capture must not leave the system proxy pointing at us.
-    capture.stop().await
+    if auto_record {
+        capture.stop().await
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn reads_live_status_and_topic_from_the_search_result() {
+    fn exact_target_live() {
         assert_eq!(
-            parse_page_output("LIVE 直播中 , 6.6万人看过 长发小寨溯源专场 新华网\n", "新华网"),
+            parse_page_output("LIVE\t陈赫\t测试直播", "陈赫"),
             PageState::Live {
-                title: Some("长发小寨溯源专场".into())
+                title: Some("测试直播".into())
             }
         );
+    }
+    #[test]
+    fn another_account_cannot_report_target_live() {
         assert_eq!(
-            parse_page_output("LIVE 直播中 , 新华网", "新华网"),
-            PageState::Live { title: None }
+            parse_page_output("LIVE\t陈赫工作室\t测试直播", "陈赫"),
+            PageState::Unknown
+        );
+        assert_eq!(
+            parse_page_output("OFFLINE\t陈赫工作室", "陈赫"),
+            PageState::Unknown
         );
     }
-
     #[test]
-    fn missing_page_and_no_live_result_are_told_apart() {
-        assert_eq!(parse_page_output("NOPAGE\n", "新华网"), PageState::NoPage);
-        assert_eq!(parse_page_output("", "新华网"), PageState::Offline);
+    fn empty_output_is_unknown_not_offline() {
+        assert_eq!(parse_page_output("", "陈赫"), PageState::Unknown);
+    }
+    #[test]
+    fn missing_page_is_distinct_from_offline() {
+        assert_eq!(parse_page_output("NOPAGE", "陈赫"), PageState::NoPage);
+    }
+    #[test]
+    fn account_must_be_observed_before_offline() {
+        assert_eq!(
+            parse_page_output("OFFLINE\t陈赫", "陈赫"),
+            PageState::Offline
+        );
+    }
+    #[test]
+    fn missing_account_is_not_offline() {
+        assert_eq!(
+            parse_page_output("NOTFOUND", "陈赫"),
+            PageState::AccountNotFound
+        );
+    }
+    #[test]
+    fn ambiguous_names_are_not_live() {
+        assert_eq!(parse_page_output("AMBIGUOUS", "陈赫"), PageState::Ambiguous);
+    }
+    #[test]
+    fn duplicate_records_are_ambiguous() {
+        assert_eq!(
+            parse_page_output("LIVE\t陈赫\t一\nLIVE\t陈赫\t二", "陈赫"),
+            PageState::Ambiguous
+        );
+    }
+    #[test]
+    fn refresh_failure_is_not_offline() {
+        assert_eq!(
+            parse_page_output("REFRESH_FAILED", "陈赫"),
+            PageState::Unknown
+        );
+    }
+    #[test]
+    fn unknown_protocol_is_not_offline() {
+        assert_eq!(parse_page_output("loading...", "陈赫"), PageState::Unknown);
     }
 }
