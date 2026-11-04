@@ -48,7 +48,7 @@ Get-ChildItem -Path (Join-Path $root "src-tauri\target\$Profile\build\whisper-rs
         Remove-Item -LiteralPath $_.FullName
     }
 }
-foreach ($name in @('ffmpeg.exe', 'ffprobe.exe', 'ffplay.exe')) {
+foreach ($name in @('ffmpeg.exe', 'ffprobe.exe')) {
     if (-not (Test-Path -LiteralPath (Join-Path $root "src-tauri\$name"))) {
         throw "Missing media resource src-tauri\$name. Run ffmpeg_setup.ps1 in this checkout first."
     }
@@ -65,7 +65,7 @@ if ($LASTEXITCODE -ne 0) { throw "Isolated native build failed ($LASTEXITCODE)."
 $output = Join-Path $root 'src-tauri\target\local-artifacts'
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $root "src-tauri\target\$Profile\LIVE.exe") -Destination (Join-Path $output 'LIVE.exe')
-foreach ($name in @('ffmpeg.exe', 'ffprobe.exe', 'ffplay.exe')) {
+foreach ($name in @('ffmpeg.exe', 'ffprobe.exe')) {
     Copy-Item -LiteralPath (Join-Path $root "src-tauri\$name") -Destination $output
 }
 @'
