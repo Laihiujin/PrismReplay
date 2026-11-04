@@ -333,17 +333,28 @@ fn trust_store_contains(_serial_hex: &str) -> bool {
 
 // --- system proxy ------------------------------------------------------------------------------
 
+const PROXY_FLAG_DIRECT: u32 = 0x1;
+const PROXY_FLAG_PROXY: u32 = 0x2;
+const PROXY_FLAG_AUTO_URL: u32 = 0x4;
+
+/// The current user's proxy settings for the default connection, as Windows stores them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProxySnapshot {
-    pub enabled: bool,
+    pub flags: u32,
     pub server: Option<String>,
-    #[serde(default)]
+    pub bypass: Option<String>,
     pub auto_config_url: Option<String>,
+}
+
+impl ProxySnapshot {
+    fn enabled(&self) -> bool {
+        self.flags & PROXY_FLAG_PROXY != 0
+    }
 }
 
 pub trait ProxyStore: Send + Sync {
     fn read(&self) -> Result<ProxySnapshot, String>;
-    fn write(&self, enabled: bool, server: Option<&str>) -> Result<(), String>;
+    fn write(&self, snapshot: &ProxySnapshot) -> Result<(), String>;
 }
 
 #[derive(Serialize, Deserialize)]
@@ -355,7 +366,7 @@ struct RestoreRecord {
 /// Writes the restore record before touching the proxy, so that a crash can always be repaired.
 fn take_over_proxy(store: &dyn ProxyStore, dir: &Path, port: u16) -> Result<ProxySnapshot, String> {
     let previous = store.read()?;
-    if previous.auto_config_url.is_some() {
+    if previous.flags & PROXY_FLAG_AUTO_URL != 0 {
         return Err("系统正在使用自动配置脚本（PAC），请先在系统代理设置里关闭后再抓取".into());
     }
     let ours = format!("127.0.0.1:{port}");
@@ -369,7 +380,13 @@ fn take_over_proxy(store: &dyn ProxyStore, dir: &Path, port: u16) -> Result<Prox
         serde_json::to_string(&record).unwrap(),
     )
     .map_err(|e| format!("无法写入恢复记录：{e}"))?;
-    if let Err(error) = store.write(true, Some(&ours)) {
+    let takeover = ProxySnapshot {
+        flags: PROXY_FLAG_DIRECT | PROXY_FLAG_PROXY,
+        server: Some(ours),
+        bypass: previous.bypass.clone(),
+        auto_config_url: None,
+    };
+    if let Err(error) = store.write(&takeover) {
         let _ = restore_proxy(store, dir);
         return Err(error);
     }
@@ -384,53 +401,132 @@ pub fn restore_proxy(store: &dyn ProxyStore, dir: &Path) -> Result<(), String> {
     };
     if let Ok(record) = serde_json::from_str::<RestoreRecord>(&text) {
         let current = store.read()?;
-        if current.enabled && current.server.as_deref() == Some(record.ours.as_str()) {
-            store.write(record.previous.enabled, record.previous.server.as_deref())?;
+        if current.enabled() && current.server.as_deref() == Some(record.ours.as_str()) {
+            store.write(&record.previous)?;
         }
     }
     std::fs::remove_file(&path).map_err(|e| format!("无法清除恢复记录：{e}"))
 }
 
+/// Uses the WinINet per-connection API. Writing only `ProxyServer`/`ProxyEnable` in the registry is
+/// not enough: Chromium-based apps such as WeChat read `DefaultConnectionSettings`, which this
+/// API keeps in step with those values.
 #[cfg(windows)]
 pub struct SystemProxyStore;
 
 #[cfg(windows)]
 impl ProxyStore for SystemProxyStore {
     fn read(&self) -> Result<ProxySnapshot, String> {
-        let key = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
-            .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Internet Settings")
-            .map_err(|e| format!("无法读取系统代理：{e}"))?;
+        use windows_sys::Win32::{
+            Foundation::GlobalFree,
+            Networking::WinInet::{
+                InternetQueryOptionW, INTERNET_OPTION_PER_CONNECTION_OPTION,
+                INTERNET_PER_CONN_AUTOCONFIG_URL, INTERNET_PER_CONN_FLAGS, INTERNET_PER_CONN_OPTIONW,
+                INTERNET_PER_CONN_OPTION_LISTW, INTERNET_PER_CONN_PROXY_BYPASS,
+                INTERNET_PER_CONN_PROXY_SERVER,
+            },
+        };
+        // SAFETY: the option structs are plain data; zero is valid for every field.
+        let mut options: [INTERNET_PER_CONN_OPTIONW; 4] = unsafe { std::mem::zeroed() };
+        options[0].dwOption = INTERNET_PER_CONN_FLAGS;
+        options[1].dwOption = INTERNET_PER_CONN_PROXY_SERVER;
+        options[2].dwOption = INTERNET_PER_CONN_PROXY_BYPASS;
+        options[3].dwOption = INTERNET_PER_CONN_AUTOCONFIG_URL;
+        let mut list = INTERNET_PER_CONN_OPTION_LISTW {
+            dwSize: std::mem::size_of::<INTERNET_PER_CONN_OPTION_LISTW>() as u32,
+            pszConnection: std::ptr::null_mut(),
+            dwOptionCount: options.len() as u32,
+            dwOptionError: 0,
+            pOptions: options.as_mut_ptr(),
+        };
+        let mut size = list.dwSize;
+        // SAFETY: `list` and `options` outlive the call and `size` is the size of `list`.
+        let ok = unsafe {
+            InternetQueryOptionW(
+                std::ptr::null_mut(),
+                INTERNET_OPTION_PER_CONNECTION_OPTION,
+                std::ptr::addr_of_mut!(list).cast(),
+                &mut size,
+            )
+        };
+        if ok == 0 {
+            return Err(format!(
+                "无法读取系统代理：{}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: on success Windows filled the union member matching each option; the strings
+        // are null or NUL-terminated allocations that this code owns and must free.
+        let take_string = |index: usize| unsafe {
+            let ptr = options[index].Value.pszValue;
+            if ptr.is_null() {
+                return None;
+            }
+            let len = (0..).take_while(|&i| *ptr.add(i) != 0).count();
+            let text = String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len));
+            GlobalFree(ptr as _);
+            Some(text).filter(|text| !text.is_empty())
+        };
         Ok(ProxySnapshot {
-            enabled: key.get_value::<u32, _>("ProxyEnable").unwrap_or(0) != 0,
-            server: key.get_value::<String, _>("ProxyServer").ok(),
-            auto_config_url: key
-                .get_value::<String, _>("AutoConfigURL")
-                .ok()
-                .filter(|url| !url.is_empty()),
+            // SAFETY: option 0 is `INTERNET_PER_CONN_FLAGS`, a DWORD.
+            flags: unsafe { options[0].Value.dwValue },
+            server: take_string(1),
+            bypass: take_string(2),
+            auto_config_url: take_string(3),
         })
     }
 
-    fn write(&self, enabled: bool, server: Option<&str>) -> Result<(), String> {
+    fn write(&self, snapshot: &ProxySnapshot) -> Result<(), String> {
         use windows_sys::Win32::Networking::WinInet::{
-            InternetSetOptionW, INTERNET_OPTION_REFRESH, INTERNET_OPTION_SETTINGS_CHANGED,
+            InternetSetOptionW, INTERNET_OPTION_PER_CONNECTION_OPTION, INTERNET_OPTION_REFRESH,
+            INTERNET_OPTION_SETTINGS_CHANGED, INTERNET_PER_CONN_AUTOCONFIG_URL,
+            INTERNET_PER_CONN_FLAGS, INTERNET_PER_CONN_OPTIONW, INTERNET_PER_CONN_OPTION_LISTW,
+            INTERNET_PER_CONN_PROXY_BYPASS, INTERNET_PER_CONN_PROXY_SERVER,
         };
-        let err = |e: std::io::Error| format!("无法修改系统代理：{e}");
-        let key = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
-            .open_subkey_with_flags(
-                r"Software\Microsoft\Windows\CurrentVersion\Internet Settings",
-                winreg::enums::KEY_READ | winreg::enums::KEY_SET_VALUE,
-            )
-            .map_err(err)?;
-        match server {
-            Some(server) => key.set_value("ProxyServer", &server).map_err(err)?,
-            None => {
-                let _ = key.delete_value("ProxyServer");
-            }
-        }
-        key.set_value("ProxyEnable", &u32::from(enabled))
-            .map_err(err)?;
-        // SAFETY: both options take no buffer; a null handle applies them to the whole process.
+        let wide = |text: &Option<String>| -> Vec<u16> {
+            text.as_deref()
+                .unwrap_or("")
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect()
+        };
+        let (mut server, mut bypass, mut auto_url) = (
+            wide(&snapshot.server),
+            wide(&snapshot.bypass),
+            wide(&snapshot.auto_config_url),
+        );
+        // SAFETY: the option structs are plain data; zero is valid for every field.
+        let mut options: [INTERNET_PER_CONN_OPTIONW; 4] = unsafe { std::mem::zeroed() };
+        options[0].dwOption = INTERNET_PER_CONN_FLAGS;
+        options[0].Value.dwValue = snapshot.flags;
+        options[1].dwOption = INTERNET_PER_CONN_PROXY_SERVER;
+        options[1].Value.pszValue = server.as_mut_ptr();
+        options[2].dwOption = INTERNET_PER_CONN_PROXY_BYPASS;
+        options[2].Value.pszValue = bypass.as_mut_ptr();
+        options[3].dwOption = INTERNET_PER_CONN_AUTOCONFIG_URL;
+        options[3].Value.pszValue = auto_url.as_mut_ptr();
+        let list = INTERNET_PER_CONN_OPTION_LISTW {
+            dwSize: std::mem::size_of::<INTERNET_PER_CONN_OPTION_LISTW>() as u32,
+            pszConnection: std::ptr::null_mut(),
+            dwOptionCount: options.len() as u32,
+            dwOptionError: 0,
+            pOptions: options.as_mut_ptr(),
+        };
+        // SAFETY: `list`, `options` and the strings all outlive these calls. The notifications
+        // take no buffer, and a null handle applies them to every WinINet client.
         unsafe {
+            if InternetSetOptionW(
+                std::ptr::null_mut(),
+                INTERNET_OPTION_PER_CONNECTION_OPTION,
+                std::ptr::addr_of!(list).cast(),
+                list.dwSize,
+            ) == 0
+            {
+                return Err(format!(
+                    "无法修改系统代理：{}",
+                    std::io::Error::last_os_error()
+                ));
+            }
             InternetSetOptionW(
                 std::ptr::null_mut(),
                 INTERNET_OPTION_SETTINGS_CHANGED,
@@ -639,7 +735,7 @@ impl WechatCapture {
             port,
             shutdown,
             started: std::time::Instant::now(),
-            replaced_existing_proxy: previous.enabled,
+            replaced_existing_proxy: previous.enabled(),
             watchdog,
         });
         Ok(())
@@ -681,19 +777,19 @@ mod tests {
     use hudsucker::hyper_util::client::legacy::connect::HttpConnector;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    #[derive(Default)]
-    struct FakeStore(StdMutex<Option<ProxySnapshot>>);
+    struct FakeStore(StdMutex<ProxySnapshot>);
 
     impl FakeStore {
-        fn with(enabled: bool, server: Option<&str>) -> Self {
-            Self(StdMutex::new(Some(ProxySnapshot {
-                enabled,
+        fn with(flags: u32, server: Option<&str>) -> Self {
+            Self(StdMutex::new(ProxySnapshot {
+                flags,
                 server: server.map(str::to_string),
+                bypass: Some("<local>".into()),
                 auto_config_url: None,
-            })))
+            }))
         }
         fn get(&self) -> ProxySnapshot {
-            self.0.lock().unwrap().clone().unwrap()
+            self.0.lock().unwrap().clone()
         }
     }
 
@@ -701,14 +797,8 @@ mod tests {
         fn read(&self) -> Result<ProxySnapshot, String> {
             Ok(self.get())
         }
-        fn write(&self, enabled: bool, server: Option<&str>) -> Result<(), String> {
-            let mut value = self.0.lock().unwrap();
-            let auto_config_url = value.as_ref().and_then(|v| v.auto_config_url.clone());
-            *value = Some(ProxySnapshot {
-                enabled,
-                server: server.map(str::to_string),
-                auto_config_url,
-            });
+        fn write(&self, snapshot: &ProxySnapshot) -> Result<(), String> {
+            *self.0.lock().unwrap() = snapshot.clone();
             Ok(())
         }
     }
@@ -750,26 +840,26 @@ mod tests {
     #[test]
     fn proxy_is_restored_exactly_and_marker_removed() {
         let dir = temp_dir();
-        let store = FakeStore::with(true, Some("127.0.0.1:7897"));
+        let store = FakeStore::with(PROXY_FLAG_DIRECT | PROXY_FLAG_PROXY, Some("127.0.0.1:7897"));
+        let before = store.get();
         take_over_proxy(&store, &dir, 5555).unwrap();
         assert_eq!(store.get().server.as_deref(), Some("127.0.0.1:5555"));
+        assert!(store.get().enabled());
         restore_proxy(&store, &dir).unwrap();
-        let after = store.get();
-        assert!(after.enabled);
-        assert_eq!(after.server.as_deref(), Some("127.0.0.1:7897"));
+        assert_eq!(store.get(), before);
         assert!(!dir.join(RESTORE_FILE).exists());
     }
 
     #[test]
     fn crash_recovery_restores_a_disabled_proxy() {
         let dir = temp_dir();
-        let store = FakeStore::with(false, None);
+        let store = FakeStore::with(PROXY_FLAG_DIRECT | 0x8, None);
+        let before = store.get();
         take_over_proxy(&store, &dir, 5555).unwrap();
-        assert!(store.get().enabled);
+        assert!(store.get().enabled());
         // A new process only has the record on disk.
         restore_proxy(&store, &dir).unwrap();
-        assert!(!store.get().enabled);
-        assert_eq!(store.get().server, None);
+        assert_eq!(store.get(), before);
         // Nothing to do on a clean start.
         restore_proxy(&store, &dir).unwrap();
     }
@@ -777,25 +867,36 @@ mod tests {
     #[test]
     fn later_proxy_changes_by_other_tools_are_left_alone() {
         let dir = temp_dir();
-        let store = FakeStore::with(false, Some("127.0.0.1:7897"));
+        let store = FakeStore::with(PROXY_FLAG_DIRECT, Some("127.0.0.1:7897"));
         take_over_proxy(&store, &dir, 5555).unwrap();
-        store.write(true, Some("127.0.0.1:9999")).unwrap();
+        let other = ProxySnapshot {
+            flags: PROXY_FLAG_DIRECT | PROXY_FLAG_PROXY,
+            server: Some("127.0.0.1:9999".into()),
+            bypass: None,
+            auto_config_url: None,
+        };
+        store.write(&other).unwrap();
         restore_proxy(&store, &dir).unwrap();
-        assert_eq!(store.get().server.as_deref(), Some("127.0.0.1:9999"));
-        assert!(store.get().enabled);
+        assert_eq!(store.get(), other);
     }
 
     #[test]
     fn pac_configuration_is_refused_without_changes() {
         let dir = temp_dir();
-        let store = FakeStore(StdMutex::new(Some(ProxySnapshot {
-            enabled: false,
-            server: None,
-            auto_config_url: Some("http://pac.example/p.pac".into()),
-        })));
+        let store = FakeStore::with(PROXY_FLAG_DIRECT | PROXY_FLAG_AUTO_URL, None);
+        let before = store.get();
         assert!(take_over_proxy(&store, &dir, 5555).is_err());
-        assert!(!store.get().enabled);
+        assert_eq!(store.get(), before);
         assert!(!dir.join(RESTORE_FILE).exists());
+    }
+
+    /// Read-only: checks the query path against the real settings without changing them.
+    #[cfg(windows)]
+    #[test]
+    fn reads_the_real_proxy_settings() {
+        let snapshot = SystemProxyStore.read().unwrap();
+        println!("flags={:#x} server={:?}", snapshot.flags, snapshot.server);
+        assert_ne!(snapshot.flags, 0);
     }
 
     #[test]

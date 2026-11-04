@@ -41,7 +41,6 @@ hudsucker = { version = "0.25", default-features = false, features = ["rcgen-ca"
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring", "x509-parser"] }
 
 [target.'cfg(windows)'.dependencies]
-winreg = "0.52"
 windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Networking_WinInet"] }
 
 [dev-dependencies]
