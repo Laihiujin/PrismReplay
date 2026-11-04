@@ -3,12 +3,12 @@ members = ["crates/danmu_stream", "crates/recorder"]
 resolver = "2"
 
 [package]
-name = "shadowverse"
+name = "live"
 version = "3.19.11"
-description = "ShadowVerse"
+description = "LIVE"
 authors = ["Laihiujin+Xinrea"]
 license = ""
-repository = ""
+repository = "https://github.com/Laihiujin/LIVE"
 edition = "2021"
 
 [lints.clippy]

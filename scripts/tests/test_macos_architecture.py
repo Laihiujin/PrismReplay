@@ -42,7 +42,7 @@ targets = [("aarch64-apple-darwin", "arm64"), ("x86_64-apple-darwin", "x86_64"),
 for target, archs in targets:
     for available, expected in [(archs, 0), ("wrong_architecture", 1)]:
         env = dict(os.environ, TARGET=target, AVAILABLE_ARCHS=available,
-                   INSTALLED_APP="/fixture path/Prism Replay.app", EXECUTABLE="shadowverse")
+                   INSTALLED_APP="/fixture path/LIVE.app", EXECUTABLE="live")
         proc = subprocess.run(["bash", "-c", contract + blocks[0]], env=env, capture_output=True, text=True)
         ok = proc.returncode == expected
         print(f"{'PASS' if ok else 'FAIL'} {target} available={available}: exit={proc.returncode}, expected={expected}")

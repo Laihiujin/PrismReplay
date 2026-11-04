@@ -2,6 +2,7 @@
 
 mod config;
 mod constants;
+mod data_identity;
 mod danmu2ass;
 mod database;
 mod ffmpeg;
@@ -87,6 +88,51 @@ async fn open_log_file(log_dir: &Path) -> Result<File, Box<dyn std::error::Error
         .create(true)
         .append(true)
         .open(&log_filename)?)
+}
+
+/// Exact app-owned roots only; never import the unrelated upstream app.
+pub(crate) fn legacy_storage_paths() -> Vec<(std::path::PathBuf, std::path::PathBuf)> {
+    use platform_dirs::AppDirs;
+    let mut paths = Vec::new();
+    if let (Some(old), Some(new)) = (
+        AppDirs::new(Some(constants::LEGACY_APP_DATA_ID), false),
+        AppDirs::new(Some(constants::APP_DATA_ID), false),
+    ) {
+        paths.extend([
+            (old.data_dir, new.data_dir),
+            (old.config_dir, new.config_dir),
+            (old.cache_dir, new.cache_dir),
+            (old.state_dir, new.state_dir),
+        ]);
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = std::path::PathBuf::from(home);
+        let logs = home.join("Library/Logs");
+        paths.push((
+            logs.join(constants::LEGACY_APP_DATA_ID),
+            logs.join(constants::APP_DATA_ID),
+        ));
+        // Tauri's WebKit storage uses ~/Library/WebKit/<bundle identifier>.
+        let webkit = home.join("Library/WebKit");
+        paths.push((
+            webkit.join(constants::LEGACY_APP_DATA_ID),
+            webkit.join(constants::APP_DATA_ID),
+        ));
+    }
+    #[cfg(target_os = "windows")]
+    for drive in b'D'..=b'Z' {
+        let root = std::path::PathBuf::from(format!("{}:\\", drive as char));
+        if root.exists() {
+            paths.push((
+                root.join(constants::LEGACY_APP_DATA_ID),
+                root.join(constants::APP_DATA_ID),
+            ));
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 #[cfg(target_os = "windows")]
@@ -910,6 +956,7 @@ fn setup_invoke_handlers(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
 
 #[cfg(feature = "gui")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    data_identity::migrate_directories(&legacy_storage_paths())?;
     let _guard = sentry::init((
         "https://fbf803d994a257326ea8f043d79058eb@sentry.vjoi.cn/2",
         sentry::ClientOptions {
@@ -1031,6 +1078,7 @@ struct Args {
 #[cfg(feature = "headless")]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    data_identity::migrate_directories(&legacy_storage_paths())?;
     let _guard = sentry::init((
         "https://fbf803d994a257326ea8f043d79058eb@sentry.vjoi.cn/2",
         sentry::ClientOptions {

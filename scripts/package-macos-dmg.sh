@@ -6,7 +6,7 @@ TARGET="${1:?target is required}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-APP_NAME="${APP_NAME:-PrismReplay}"
+APP_NAME="${APP_NAME:-LIVE}"
 VERSION="${VERSION:-$(node -p "require('./package.json').version")}"
 
 case "$TARGET" in

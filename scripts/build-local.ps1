@@ -64,7 +64,7 @@ if ($LASTEXITCODE -ne 0) { throw "Isolated native build failed ($LASTEXITCODE)."
 
 $output = Join-Path $root 'src-tauri\target\local-artifacts'
 New-Item -ItemType Directory -Path $output -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $root "src-tauri\target\$Profile\shadowverse.exe") -Destination (Join-Path $output 'PrismReplay-Local.exe')
+Copy-Item -LiteralPath (Join-Path $root "src-tauri\target\$Profile\LIVE.exe") -Destination (Join-Path $output 'LIVE.exe')
 foreach ($name in @('ffmpeg.exe', 'ffprobe.exe', 'ffplay.exe')) {
     Copy-Item -LiteralPath (Join-Path $root "src-tauri\$name") -Destination $output
 }
@@ -73,8 +73,8 @@ foreach ($name in @('ffmpeg.exe', 'ffprobe.exe', 'ffplay.exe')) {
 setlocal
 cd /d "%~dp0"
 set "PATH=%~dp0;%PATH%"
-start "" "%~dp0PrismReplay-Local.exe"
+start "" "%~dp0LIVE.exe"
 '@ | Set-Content -LiteralPath (Join-Path $output 'Launch-Local.cmd') -Encoding Ascii
-Get-FileHash -LiteralPath (Join-Path $output 'PrismReplay-Local.exe') -Algorithm SHA256
+Get-FileHash -LiteralPath (Join-Path $output 'LIVE.exe') -Algorithm SHA256
 Write-Output "Isolated local build: $output"
 Write-Output 'No installer was run. No installed application or existing account/cache directory was modified.'

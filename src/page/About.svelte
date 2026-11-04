@@ -1,13 +1,13 @@
 <script type="ts">
   import { open } from "../lib/invoker";
-  import { BookOpen, MessageCircle, Video, Heart } from "lucide-svelte";
+  import { BookOpen, MessageCircle, Heart } from "lucide-svelte";
   import { hasNewVersion, latestVersion } from "../lib/stores/version";
   let version = `v${__APP_VERSION__}`;
   let showDonateModal = false;
   let releases = [];
 
   // get releases from github api
-  fetch("https://api.github.com/repos/laihiujin/PrismReplay/releases")
+  fetch("https://api.github.com/repos/laihiujin/LIVE/releases")
     .then((response) => response.json())
     .then((data) => {
       // Filter out prerelease versions
@@ -60,14 +60,10 @@
   <div class="max-w-2xl mx-auto space-y-8">
     <!-- App Info -->
     <div class="text-center space-y-4">
-      <div
-        class="w-24 h-24 mx-auto bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl shadow-lg flex items-center justify-center"
-      >
-        <Video class="w-12 h-12 icon-white" />
-      </div>
+      <img src="/app-icon.png" alt="LIVE" class="w-24 h-24 mx-auto rounded-2xl shadow-lg" />
       <div>
         <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
-          PrismReplay
+          LIVE
         </h1>
         <p class="text-gray-500 dark:text-gray-400">Version {version}</p>
       </div>
@@ -79,7 +75,7 @@
         class="p-4 rounded-xl bg-white dark:bg-[#3c3c3e] border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
         on:click={() => {
           // tauri open url
-          open("https://bsr.xinrea.cn/");
+          open("https://github.com/Laihiujin/LIVE#readme");
         }}
       >
         <div class="flex flex-col items-center space-y-2">

@@ -171,17 +171,17 @@ impl TikTokRecorder {
     }
 
     fn prefer_protocol() -> TikTokProtocol {
-        if let Ok(value) = std::env::var("BSR_TIKTOK_PREFER_PROTOCOL") {
+        if let Ok(value) = std::env::var("LIVE_TIKTOK_PREFER_PROTOCOL") {
             if let Some(protocol) = TikTokProtocol::from_str(&value) {
                 return protocol;
             }
         }
-        if let Ok(value) = std::env::var("BSR_TIKTOK_PREFER_HLS") {
+        if let Ok(value) = std::env::var("LIVE_TIKTOK_PREFER_HLS") {
             if let Some(true) = Self::parse_bool_env(&value) {
                 return TikTokProtocol::Hls;
             }
         }
-        if let Ok(value) = std::env::var("BSR_TIKTOK_PREFER_FLV") {
+        if let Ok(value) = std::env::var("LIVE_TIKTOK_PREFER_FLV") {
             if let Some(true) = Self::parse_bool_env(&value) {
                 return TikTokProtocol::Flv;
             }

@@ -2,7 +2,7 @@
 
 ## 概述
 
-BiliBili ShadowReplay 使用 SQLite 作为主要数据存储，通过 sqlx 提供异步数据库操作。数据库模块位于 `src-tauri/src/database/`。
+LIVE 使用 SQLite 作为主要数据存储，通过 sqlx 提供异步数据库操作。数据库模块位于 `src-tauri/src/database/`。
 
 ## 技术栈
 

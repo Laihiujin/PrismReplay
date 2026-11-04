@@ -1,0 +1,9 @@
+{
+  "name": "LIVE",
+  "source": "LIVE.jpg",
+  "source_sha256": "0bc23fa32e48930bdefab415e9895bbd9555a50cc5428815e648b6b932baacc2",
+  "transparent_master": "LIVE.png",
+  "transparent_master_sha256": "cd23f72c3ce78ec84ae7efed1deea4d302d0367cc897f69ac6b7c5116dcf52ff",
+  "process": "Checkerboard removed using image_gen; platform icon formats generated with Tauri CLI.",
+  "note": "The original 360px JPEG is retained. The PNG is a processed cutout, not a byte-identical conversion."
+}

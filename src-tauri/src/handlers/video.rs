@@ -485,7 +485,7 @@ async fn clip_range_inner(
             .app_handle
             .notification()
             .builder()
-            .title("PrismReplay - 切片完成")
+            .title("LIVE - 切片完成")
             .body(format!(
                 "生成了房间 {} 的切片: {}",
                 &params.room_id, filename
@@ -608,7 +608,7 @@ async fn upload_procedure_inner(
                         .app_handle
                         .notification()
                         .builder()
-                        .title("PrismReplay - 投稿成功")
+                        .title("LIVE - 投稿成功")
                         .body(format!("投稿了房间 {} 的切片: {}", room_id, ret.bvid))
                         .show()
                         .unwrap();

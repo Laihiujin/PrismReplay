@@ -1,4 +1,4 @@
-# ShadowVerse contribute guide
+# LIVE contribute guide
 
 ## Project Setup
 

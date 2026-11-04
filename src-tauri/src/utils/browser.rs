@@ -154,7 +154,7 @@ impl BrowserCookieCollector {
 
             // Copy file to avoid lock
             let temp_db =
-                std::env::temp_dir().join(format!("bsr_cookies_{}.db", profile.replace(' ', "_")));
+                std::env::temp_dir().join(format!("live_cookies_{}.db", profile.replace(' ', "_")));
             if let Err(e) = copy_cookie_db(&cookie_path, &temp_db) {
                 log::warn!(
                     "Failed to copy cookie database for profile {}: {}",

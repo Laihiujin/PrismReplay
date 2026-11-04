@@ -25,6 +25,10 @@
 <div
   class="w-48 bg-[#f0f0f3]/50 dark:bg-black backdrop-blur-xl border-r border-gray-200 dark:border-gray-700"
 >
+  <div class="flex items-center gap-2 px-4 pt-4 pb-2">
+    <img src="/app-icon.png" alt="LIVE" class="w-10 h-10 object-contain" />
+    <span class="text-base font-semibold text-gray-900 dark:text-white">LIVE</span>
+  </div>
   <nav class="p-3 space-y-1">
     <SidebarItem label="总览" value="overview" {activeUrl} on:activeChange={navigate}>
       <div slot="icon">

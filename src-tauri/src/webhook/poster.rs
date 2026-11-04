@@ -4,7 +4,7 @@
 //! It includes retry logic, custom headers support, and proper error handling.
 //!
 //! use std::collections::HashMap;
-//! use ShadowVerse::webhook::poster::create_webhook_poster_with_headers;
+//! use LIVE::webhook::poster::create_webhook_poster_with_headers;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 //! let mut headers = HashMap::new();

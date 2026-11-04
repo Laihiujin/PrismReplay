@@ -150,9 +150,9 @@ jobs:
           CUDA_PATH: ${{ matrix.platform == 'windows-latest' && contains(matrix.args, 'cuda') && env.CUDA_PATH || '' }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "PrismReplay ${{ github.ref_name }}"
+          releaseName: "LIVE ${{ github.ref_name }}"
           releaseBody: |
-            ## PrismReplay ${{ github.ref_name }}
+            ## LIVE ${{ github.ref_name }}
 
             See the [CHANGELOG](https://github.com/${{ github.repository }}/releases) for more details.
           releaseDraft: true
@@ -191,7 +191,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: PrismReplay ${{ github.ref_name }}
+          name: LIVE ${{ github.ref_name }}
           draft: true
           prerelease: false
           files: src-tauri/target/${{ matrix.rust-target }}/release/bundle/dmg/*.dmg
@@ -202,7 +202,7 @@ jobs:
         if: startsWith(matrix.label, 'macos-')
         uses: actions/upload-artifact@v4
         with:
-          name: PrismReplay-${{ matrix.label }}-dmg
+          name: LIVE-${{ matrix.label }}-dmg
           path: src-tauri/target/${{ matrix.rust-target }}/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
@@ -277,24 +277,24 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: PrismReplay ${{ github.ref_name }}
+          name: LIVE ${{ github.ref_name }}
           draft: true
           prerelease: false
           files: |
-            src-tauri/target/prismreplay-cpu_*_x64-setup.exe
-            src-tauri/target/prismreplay-cpu_*_x64_en-US.msi
-            src-tauri/target/prismreplay-cuda_*_x64-setup.exe
-            src-tauri/target/prismreplay-cuda_*_x64_en-US.msi
+            src-tauri/target/LIVE-cpu_*_x64-setup.exe
+            src-tauri/target/LIVE-cpu_*_x64_en-US.msi
+            src-tauri/target/LIVE-cuda_*_x64-setup.exe
+            src-tauri/target/LIVE-cuda_*_x64_en-US.msi
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN != '' && secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Upload Windows packages artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PrismReplay-windows-packages
+          name: LIVE-windows-packages
           path: |
-            src-tauri/target/prismreplay-cpu_*_x64-setup.exe
-            src-tauri/target/prismreplay-cpu_*_x64_en-US.msi
-            src-tauri/target/prismreplay-cuda_*_x64-setup.exe
-            src-tauri/target/prismreplay-cuda_*_x64_en-US.msi
+            src-tauri/target/LIVE-cpu_*_x64-setup.exe
+            src-tauri/target/LIVE-cpu_*_x64_en-US.msi
+            src-tauri/target/LIVE-cuda_*_x64-setup.exe
+            src-tauri/target/LIVE-cuda_*_x64_en-US.msi
           if-no-files-found: error

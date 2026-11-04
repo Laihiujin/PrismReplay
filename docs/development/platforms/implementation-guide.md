@@ -2,7 +2,7 @@
 
 ## 概述
 
-BiliBili ShadowReplay 支持多个直播平台，每个平台的实现位于 `src-tauri/crates/recorder/src/platforms/<platform>/` 目录。
+LIVE 支持多个直播平台，每个平台的实现位于 `src-tauri/crates/recorder/src/platforms/<platform>/` 目录。
 
 ## 支持的平台
 

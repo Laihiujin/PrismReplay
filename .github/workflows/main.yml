@@ -7,6 +7,7 @@ on:
 
 jobs:
   build-artifacts:
+    if: false
     strategy:
       fail-fast: false
       matrix:
@@ -96,7 +97,7 @@ jobs:
         if: startsWith(matrix.platform, 'macos-')
         uses: actions/upload-artifact@v4
         with:
-          name: PrismReplay-${{ matrix.label }}
+          name: LIVE-${{ matrix.label }}
           path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
@@ -104,7 +105,7 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         uses: actions/upload-artifact@v4
         with:
-          name: PrismReplay-${{ matrix.label }}
+          name: LIVE-${{ matrix.label }}
           path: |
             src-tauri/target/release/bundle/appimage/*.AppImage
             src-tauri/target/release/bundle/deb/*.deb
@@ -149,7 +150,7 @@ jobs:
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@v0.2.24
         with:
-          cuda: "12.4.0"
+          cuda: "12.8.0"
           method: network
           sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "visual_studio_integration"]'
 
@@ -171,10 +172,10 @@ jobs:
       - name: Upload Windows packages artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PrismReplay-windows-packages
+          name: LIVE-windows-packages
           path: |
-            src-tauri/target/prismreplay-cpu_*_x64-setup.exe
-            src-tauri/target/prismreplay-cpu_*_x64_en-US.msi
-            src-tauri/target/prismreplay-cuda_*_x64-setup.exe
-            src-tauri/target/prismreplay-cuda_*_x64_en-US.msi
+            src-tauri/target/LIVE-cpu_*_x64-setup.exe
+            src-tauri/target/LIVE-cpu_*_x64_en-US.msi
+            src-tauri/target/LIVE-cuda_*_x64-setup.exe
+            src-tauri/target/LIVE-cuda_*_x64_en-US.msi
           if-no-files-found: error

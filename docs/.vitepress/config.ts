@@ -3,15 +3,16 @@ import { withMermaid } from "vitepress-plugin-mermaid";
 
 // https://vitepress.dev/reference/site-config
 export default withMermaid({
-  title: "BiliBili ShadowReplay",
+  title: "LIVE",
   description: "直播录制/实时回放/剪辑/投稿工具",
+  head: [["link", { rel: "icon", type: "image/png", href: "/images/icon.png" }]],
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config
     nav: [
       { text: "Home", link: "/" },
       {
         text: "Releases",
-        link: "https://github.com/Xinrea/bili-shadowreplay/releases",
+        link: "https://github.com/Laihiujin/LIVE/releases",
       },
     ],
 
@@ -94,7 +95,7 @@ export default withMermaid({
             text: "外部资源",
             items: [
               {
-                text: "DeepWiki",
+                text: "上游参考（DeepWiki）",
                 link: "https://deepwiki.com/Xinrea/bili-shadowreplay",
               },
             ],
@@ -104,7 +105,7 @@ export default withMermaid({
     ],
 
     socialLinks: [
-      { icon: "github", link: "https://github.com/Xinrea/bili-shadowreplay" },
+      { icon: "github", link: "https://github.com/Laihiujin/LIVE" },
     ],
   },
 });

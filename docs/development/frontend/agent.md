@@ -2,7 +2,7 @@
 
 ## 概述
 
-BiliBili ShadowReplay 集成了基于 LangChain 的 AI Agent，用于内容分析、总结和智能辅助。Agent 实现位于 `src/lib/agent/` 目录。
+LIVE 集成了基于 LangChain 的 AI Agent，用于内容分析、总结和智能辅助。Agent 实现位于 `src/lib/agent/` 目录。
 
 ## 技术栈
 

@@ -35,7 +35,7 @@ pub const MITM_SUFFIXES: &[&str] = &[
     "qcloudcdn.com",
     "wxlivecdn.com",
 ];
-const CA_COMMON_NAME: &str = "PrismReplay Local Capture CA";
+const CA_COMMON_NAME: &str = "LIVE Local Capture CA";
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MAX_CANDIDATES: usize = 20;
 const MAX_HOSTS: usize = 200;
@@ -1065,7 +1065,7 @@ mod tests {
     }
 
     fn temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("prismreplay-capture-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("live-capture-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
