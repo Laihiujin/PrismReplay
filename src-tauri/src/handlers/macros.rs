@@ -2,7 +2,7 @@
 #[macro_export]
 macro_rules! state_type {
     () => {
-        tauri::State<'_, State>
+        tauri::State<'_, $crate::state::State>
     };
 }
 
@@ -10,6 +10,6 @@ macro_rules! state_type {
 #[macro_export]
 macro_rules! state_type {
     () => {
-        crate::state::State
+        $crate::state::State
     };
 }
