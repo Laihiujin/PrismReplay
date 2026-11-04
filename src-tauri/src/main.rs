@@ -741,10 +741,7 @@ fn setup_plugins(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::W
     let migrations = get_migrations();
     let builder = builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            let _ = app
-                .get_webview_window("main")
-                .expect("no main window")
-                .set_focus();
+            tray::show_main_window(app);
         }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_os::init())
@@ -987,6 +984,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .build(tauri::generate_context!())?
         .run(|app_handle: &tauri::AppHandle, event| {
+            // Dock clicks and LaunchServices reopening an already-running app
+            // do not necessarily invoke the single-instance plugin callback.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                tray::show_main_window(app_handle);
+            }
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 // stop all recorders
                 let recorder_manager = app_handle.state::<State>().recorder_manager.clone();
