@@ -1,4 +1,4 @@
-# ShadowVerse 构建指南
+# PrismReplay 构建指南
 
 ## 快速开始
 
@@ -63,7 +63,7 @@ git push origin v2.17.8
 ### 数据库迁移错误
 如果遇到迁移错误，删除数据库文件：
 ```bash
-rm -f ~/Library/Application\ Support/cn.ShadowVerse/data_v2.db
+rm -f ~/Library/Application\ Support/cn.PrismReplay/data_v2.db
 ```
 
 ### 构建失败

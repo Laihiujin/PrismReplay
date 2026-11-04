@@ -150,9 +150,9 @@ jobs:
           CUDA_PATH: ${{ matrix.platform == 'windows-latest' && contains(matrix.args, 'cuda') && env.CUDA_PATH || '' }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "ShadowVerse ${{ github.ref_name }}"
+          releaseName: "PrismReplay ${{ github.ref_name }}"
           releaseBody: |
-            ## ShadowVerse ${{ github.ref_name }}
+            ## PrismReplay ${{ github.ref_name }}
 
             See the [CHANGELOG](https://github.com/${{ github.repository }}/releases) for more details.
           releaseDraft: true
@@ -164,6 +164,8 @@ jobs:
         if: startsWith(matrix.label, 'macos-')
         env:
           CMAKE_OSX_DEPLOYMENT_TARGET: "13.3"
+          MACOSX_DEPLOYMENT_TARGET: "13.3"
+          CMAKE_PROJECT_INCLUDE: ${{ github.workspace }}/scripts/macos-portable.cmake
           GGML_METAL_EMBED_LIBRARY: ${{ matrix.rust-target == 'aarch64-apple-darwin' && '1' || '' }}
           WHISPER_DONT_GENERATE_BINDINGS: "1"
         run: |
@@ -189,7 +191,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: ShadowVerse ${{ github.ref_name }}
+          name: PrismReplay ${{ github.ref_name }}
           draft: true
           prerelease: false
           files: src-tauri/target/${{ matrix.rust-target }}/release/bundle/dmg/*.dmg
@@ -200,7 +202,7 @@ jobs:
         if: startsWith(matrix.label, 'macos-')
         uses: actions/upload-artifact@v4
         with:
-          name: ShadowVerse-${{ matrix.label }}-dmg
+          name: PrismReplay-${{ matrix.label }}-dmg
           path: src-tauri/target/${{ matrix.rust-target }}/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
@@ -275,24 +277,24 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: ShadowVerse ${{ github.ref_name }}
+          name: PrismReplay ${{ github.ref_name }}
           draft: true
           prerelease: false
           files: |
-            src-tauri/target/shadowverse-cpu_*_x64-setup.exe
-            src-tauri/target/shadowverse-cpu_*_x64_en-US.msi
-            src-tauri/target/shadowverse-cuda_*_x64-setup.exe
-            src-tauri/target/shadowverse-cuda_*_x64_en-US.msi
+            src-tauri/target/prismreplay-cpu_*_x64-setup.exe
+            src-tauri/target/prismreplay-cpu_*_x64_en-US.msi
+            src-tauri/target/prismreplay-cuda_*_x64-setup.exe
+            src-tauri/target/prismreplay-cuda_*_x64_en-US.msi
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN != '' && secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Upload Windows packages artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ShadowVerse-windows-packages
+          name: PrismReplay-windows-packages
           path: |
-            src-tauri/target/shadowverse-cpu_*_x64-setup.exe
-            src-tauri/target/shadowverse-cpu_*_x64_en-US.msi
-            src-tauri/target/shadowverse-cuda_*_x64-setup.exe
-            src-tauri/target/shadowverse-cuda_*_x64_en-US.msi
+            src-tauri/target/prismreplay-cpu_*_x64-setup.exe
+            src-tauri/target/prismreplay-cpu_*_x64_en-US.msi
+            src-tauri/target/prismreplay-cuda_*_x64-setup.exe
+            src-tauri/target/prismreplay-cuda_*_x64_en-US.msi
           if-no-files-found: error

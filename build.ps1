@@ -9,10 +9,12 @@ function Invoke-Yarn {
 
     if (Get-Command yarn -ErrorAction SilentlyContinue) {
         & yarn @Args
+        if ($LASTEXITCODE -ne 0) { throw "yarn failed with exit code $LASTEXITCODE" }
         return
     }
 
     & corepack yarn @Args
+    if ($LASTEXITCODE -ne 0) { throw "yarn failed with exit code $LASTEXITCODE" }
 }
 
 function Rename-And-MoveBundle {
@@ -31,10 +33,10 @@ function Rename-And-MoveBundle {
         $newName = $_.Name
 
         if ($ProductName) {
-            $newName = $newName -replace [regex]::Escape($ProductName), "shadowverse-$Suffix"
-        } elseif ($newName -notmatch "(?i)shadowverse-$([regex]::Escape($Suffix))") {
-            $newName = $newName -replace 'ShadowVerse', "shadowverse-$Suffix"
-            $newName = $newName -replace 'shadowverse', "shadowverse-$Suffix"
+            $newName = $newName -replace [regex]::Escape($ProductName), "prismreplay-$Suffix"
+        } elseif ($newName -notmatch "(?i)prismreplay-$([regex]::Escape($Suffix))") {
+            $newName = $newName -replace 'PrismReplay', "prismreplay-$Suffix"
+            $newName = $newName -replace 'shadowverse', "prismreplay-$Suffix"
         }
 
         if ($Debug) {
@@ -64,8 +66,8 @@ function Test-ReleaseBundleOutputs {
     )
 
     $patterns = @(
-        "shadowverse-$Suffix*_x64-setup.exe",
-        "shadowverse-$Suffix*_x64_en-US.msi"
+        "prismreplay-$Suffix*_x64-setup.exe",
+        "prismreplay-$Suffix*_x64_en-US.msi"
     )
 
     foreach ($pattern in $patterns) {
@@ -84,10 +86,10 @@ $requireCudaBuild = $env:REQUIRE_CUDA_BUILD -eq "1"
 Invoke-Yarn tauri build --features gui --config src-tauri/tauri.windows.cpu.conf.json
 Invoke-Yarn tauri build --debug --features gui --config src-tauri/tauri.windows.cpu.conf.json
 
-Rename-And-MoveBundle -BundlePath ./src-tauri/target/release/bundle/msi -Suffix "cpu" -ProductName "ShadowVerse-CPU"
-Rename-And-MoveBundle -BundlePath ./src-tauri/target/release/bundle/nsis -Suffix "cpu" -ProductName "ShadowVerse-CPU"
-Rename-And-MoveBundle -BundlePath ./src-tauri/target/debug/bundle/msi -Suffix "cpu" -ProductName "ShadowVerse-CPU" -Debug
-Rename-And-MoveBundle -BundlePath ./src-tauri/target/debug/bundle/nsis -Suffix "cpu" -ProductName "ShadowVerse-CPU" -Debug
+Rename-And-MoveBundle -BundlePath ./src-tauri/target/release/bundle/msi -Suffix "cpu" -ProductName "PrismReplay-CPU"
+Rename-And-MoveBundle -BundlePath ./src-tauri/target/release/bundle/nsis -Suffix "cpu" -ProductName "PrismReplay-CPU"
+Rename-And-MoveBundle -BundlePath ./src-tauri/target/debug/bundle/msi -Suffix "cpu" -ProductName "PrismReplay-CPU" -Debug
+Rename-And-MoveBundle -BundlePath ./src-tauri/target/debug/bundle/nsis -Suffix "cpu" -ProductName "PrismReplay-CPU" -Debug
 
 # CUDA build (override config)
 if (Test-CudaResources) {
@@ -100,10 +102,10 @@ if (Test-CudaResources) {
     Write-Host "Skip CUDA build: missing cudart/cublas DLLs in ./src-tauri" -ForegroundColor Yellow
 }
 
-Rename-And-MoveBundle -BundlePath ./src-tauri/target/release/bundle/msi -Suffix "cuda" -ProductName "ShadowVerse-CUDA"
-Rename-And-MoveBundle -BundlePath ./src-tauri/target/release/bundle/nsis -Suffix "cuda" -ProductName "ShadowVerse-CUDA"
-Rename-And-MoveBundle -BundlePath ./src-tauri/target/debug/bundle/msi -Suffix "cuda" -ProductName "ShadowVerse-CUDA" -Debug
-Rename-And-MoveBundle -BundlePath ./src-tauri/target/debug/bundle/nsis -Suffix "cuda" -ProductName "ShadowVerse-CUDA" -Debug
+Rename-And-MoveBundle -BundlePath ./src-tauri/target/release/bundle/msi -Suffix "cuda" -ProductName "PrismReplay-CUDA"
+Rename-And-MoveBundle -BundlePath ./src-tauri/target/release/bundle/nsis -Suffix "cuda" -ProductName "PrismReplay-CUDA"
+Rename-And-MoveBundle -BundlePath ./src-tauri/target/debug/bundle/msi -Suffix "cuda" -ProductName "PrismReplay-CUDA" -Debug
+Rename-And-MoveBundle -BundlePath ./src-tauri/target/debug/bundle/nsis -Suffix "cuda" -ProductName "PrismReplay-CUDA" -Debug
 
 if ($requireCudaBuild -and -not (Test-ReleaseBundleOutputs -Suffix "cuda")) {
     throw "CUDA build was required, but release bundles were not produced in ./src-tauri/target."

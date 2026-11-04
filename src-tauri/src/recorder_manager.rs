@@ -23,6 +23,7 @@ use recorder::platforms::huya::HuyaRecorder;
 use recorder::platforms::kuaishou::KuaishouRecorder;
 use recorder::platforms::tiktok::TikTokRecorder;
 use recorder::platforms::weibo::WeiboRecorder;
+use recorder::platforms::wechat::WechatRecorder;
 use recorder::platforms::xiaohongshu::XiaohongshuRecorder;
 use recorder::platforms::PlatformType;
 use recorder::traits::RecorderTrait;
@@ -85,6 +86,7 @@ pub enum RecorderType {
     Xiaohongshu(XiaohongshuRecorder),
     TikTok(TikTokRecorder),
     Weibo(WeiboRecorder),
+    Wechat(WechatRecorder),
 }
 
 impl RecorderType {
@@ -97,6 +99,7 @@ impl RecorderType {
             RecorderType::Xiaohongshu(recorder) => recorder.run().await,
             RecorderType::TikTok(recorder) => recorder.run().await,
             RecorderType::Weibo(recorder) => recorder.run().await,
+            RecorderType::Wechat(recorder) => recorder.run().await,
         }
     }
 
@@ -109,6 +112,7 @@ impl RecorderType {
             RecorderType::Xiaohongshu(recorder) => recorder.stop().await,
             RecorderType::TikTok(recorder) => recorder.stop().await,
             RecorderType::Weibo(recorder) => recorder.stop().await,
+            RecorderType::Wechat(recorder) => recorder.stop().await,
         }
     }
 
@@ -121,6 +125,7 @@ impl RecorderType {
             RecorderType::Xiaohongshu(recorder) => recorder.info().await,
             RecorderType::TikTok(recorder) => recorder.info().await,
             RecorderType::Weibo(recorder) => recorder.info().await,
+            RecorderType::Wechat(recorder) => recorder.info().await,
         }
     }
 
@@ -133,6 +138,7 @@ impl RecorderType {
             RecorderType::Xiaohongshu(recorder) => recorder.enable().await,
             RecorderType::TikTok(recorder) => recorder.enable().await,
             RecorderType::Weibo(recorder) => recorder.enable().await,
+            RecorderType::Wechat(recorder) => recorder.enable().await,
         }
     }
 
@@ -145,6 +151,7 @@ impl RecorderType {
             RecorderType::Xiaohongshu(recorder) => recorder.disable().await,
             RecorderType::TikTok(recorder) => recorder.disable().await,
             RecorderType::Weibo(recorder) => recorder.disable().await,
+            RecorderType::Wechat(recorder) => recorder.disable().await,
         }
     }
 }
@@ -437,7 +444,7 @@ impl RecorderManager {
                         self.app_handle
                             .notification()
                             .builder()
-                            .title("ShadowVerse - 直播开始")
+                            .title("PrismReplay - 直播开始")
                             .body(format!(
                                 "{} 开启了直播：{}",
                                 recorder.user_info.user_name, recorder.room_info.room_title
@@ -462,7 +469,7 @@ impl RecorderManager {
                         self.app_handle
                             .notification()
                             .builder()
-                            .title("ShadowVerse - 直播结束")
+                            .title("PrismReplay - 直播结束")
                             .body(format!(
                                 "{} 结束了直播：{}",
                                 recorder.user_info.user_name, recorder.room_info.room_title
@@ -530,6 +537,9 @@ impl RecorderManager {
                         .await;
                 }
                 RecorderEvent::RecordEnd { recorder } => {
+                    if recorder.room_info.platform == "wechat" {
+                        let _ = self.db.update_recorder(PlatformType::Wechat, &recorder.room_info.room_id, recorder.enabled).await;
+                    }
                     log::info!("Record end: {recorder:?}");
                     let event = events::new_webhook_event(
                         events::RECORD_ENDED,
@@ -795,7 +805,7 @@ impl RecorderManager {
                     continue;
                 }
                 let (auto_start, extra) = recorder_map.get(&(platform, room_id.clone())).unwrap();
-                let account_required = !matches!(platform, PlatformType::Huya);
+                let account_required = !matches!(platform, PlatformType::Huya | PlatformType::Wechat);
                 let recorder_id = format!("{}:{}", platform.as_str(), room_id);
                 if account_required {
                     let now = Instant::now();
@@ -879,6 +889,9 @@ impl RecorderManager {
         let event_tx = self.get_event_sender();
         let update_interval = self.config.read().await.update_interval.clone();
         let recorder: RecorderType = match platform {
+            PlatformType::Wechat => RecorderType::Wechat(
+                WechatRecorder::new(room_id, extra, cache_dir, event_tx, update_interval, enabled).await?,
+            ),
             PlatformType::BiliBili => RecorderType::BiliBili(
                 BiliRecorder::new(
                     room_id,

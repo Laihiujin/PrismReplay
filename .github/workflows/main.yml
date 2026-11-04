@@ -2,6 +2,8 @@ name: Release
 
 on:
   workflow_dispatch:
+  push:
+    branches: [fix/installer-build]
 
 jobs:
   build-artifacts:
@@ -44,6 +46,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ startsWith(matrix.platform, 'macos-') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          cache-on-failure: true
 
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -88,7 +96,7 @@ jobs:
         if: startsWith(matrix.platform, 'macos-')
         uses: actions/upload-artifact@v4
         with:
-          name: ShadowVerse-${{ matrix.label }}
+          name: PrismReplay-${{ matrix.label }}
           path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
@@ -96,7 +104,7 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         uses: actions/upload-artifact@v4
         with:
-          name: ShadowVerse-${{ matrix.label }}
+          name: PrismReplay-${{ matrix.label }}
           path: |
             src-tauri/target/release/bundle/appimage/*.AppImage
             src-tauri/target/release/bundle/deb/*.deb
@@ -124,6 +132,12 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          cache-on-failure: true
 
       - name: Install Windows dependencies
         shell: bash
@@ -157,10 +171,10 @@ jobs:
       - name: Upload Windows packages artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ShadowVerse-windows-packages
+          name: PrismReplay-windows-packages
           path: |
-            src-tauri/target/shadowverse-cpu_*_x64-setup.exe
-            src-tauri/target/shadowverse-cpu_*_x64_en-US.msi
-            src-tauri/target/shadowverse-cuda_*_x64-setup.exe
-            src-tauri/target/shadowverse-cuda_*_x64_en-US.msi
+            src-tauri/target/prismreplay-cpu_*_x64-setup.exe
+            src-tauri/target/prismreplay-cpu_*_x64_en-US.msi
+            src-tauri/target/prismreplay-cuda_*_x64-setup.exe
+            src-tauri/target/prismreplay-cuda_*_x64_en-US.msi
           if-no-files-found: error

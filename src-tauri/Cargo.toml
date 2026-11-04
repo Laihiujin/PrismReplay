@@ -78,6 +78,7 @@ anyhow = "1.0"
 custom-protocol = ["tauri/custom-protocol"]
 cuda = ["whisper-rs/cuda"]
 headless = []
+isolated-build = []
 default = ["gui"]
 gui = [
     "tauri",

@@ -91,7 +91,8 @@ pub async fn start_static_server(
     config: Arc<RwLock<Config>>,
     recorder_manager: Arc<RecorderManager>,
 ) -> Result<StaticServer, Box<dyn std::error::Error>> {
-    let bind_addr = SocketAddr::from(([0, 0, 0, 0], 0));
+    let interface = if cfg!(feature = "isolated-build") { [127, 0, 0, 1] } else { [0, 0, 0, 0] };
+    let bind_addr = SocketAddr::from((interface, 0));
     log::info!("Starting static server binding to {}", bind_addr);
 
     let listener = match tokio::net::TcpListener::bind(bind_addr).await {

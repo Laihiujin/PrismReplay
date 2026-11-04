@@ -1,12 +1,12 @@
 {
-  "productName": "ShadowVerse",
+  "productName": "PrismReplay",
   "app": {
     "windows": [
       {
         "label": "main",
         "fullscreen": false,
         "resizable": true,
-        "title": "ShadowVerse",
+        "title": "PrismReplay",
         "width": 1300,
         "height": 700,
         "transparent": false,

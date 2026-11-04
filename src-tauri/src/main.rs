@@ -100,7 +100,7 @@ fn choose_windows_output_path(default_output: &Path) -> PathBuf {
     for drive in b'D'..=b'Z' {
         let root = format!("{}:\\", drive as char);
         if Path::new(&root).exists() {
-            return PathBuf::from(root).join("cn.ShadowVerse").join("output");
+            return PathBuf::from(root).join(crate::constants::APP_DATA_ID).join("output");
         }
     }
 
@@ -118,7 +118,7 @@ fn choose_windows_cache_path(default_cache: &Path) -> PathBuf {
     for drive in b'D'..=b'Z' {
         let root = format!("{}:\\", drive as char);
         if Path::new(&root).exists() {
-            return PathBuf::from(root).join("cn.ShadowVerse").join("cache");
+            return PathBuf::from(root).join(crate::constants::APP_DATA_ID).join("cache");
         }
     }
 
@@ -136,6 +136,7 @@ async fn setup_logging(log_dir: &Path) -> Result<(), Box<dyn std::error::Error>>
     let config = ConfigBuilder::new()
         .set_target_level(simplelog::LevelFilter::Debug)
         .set_location_level(simplelog::LevelFilter::Debug)
+        .add_filter_ignore_str("hudsucker")
         .add_filter_ignore_str("tokio")
         .add_filter_ignore_str("hyper")
         .add_filter_ignore_str("sqlx")
@@ -512,7 +513,7 @@ async fn setup_server_state(args: Args) -> Result<State, Box<dyn std::error::Err
     let (cache_path, output_path) = {
         #[cfg(target_os = "windows")]
         {
-            let app_dirs = platform_dirs::AppDirs::new(Some("cn.ShadowVerse"), false).unwrap();
+            let app_dirs = platform_dirs::AppDirs::new(Some(crate::constants::APP_DATA_ID), false).unwrap();
             (
                 choose_windows_cache_path(&app_dirs.cache_dir.join("cache")),
                 choose_windows_output_path(&app_dirs.data_dir.join("output")),
@@ -630,7 +631,7 @@ async fn setup_app_state(app: &tauri::App) -> Result<State, Box<dyn std::error::
     setup_logging(&log_dir).await?;
 
     log::info!("Setting up app state...");
-    let app_dirs = AppDirs::new(Some("cn.ShadowVerse"), false).unwrap();
+    let app_dirs = AppDirs::new(Some(crate::constants::APP_DATA_ID), false).unwrap();
     let config_path = app_dirs.config_dir.join("Conf.toml");
     #[cfg(target_os = "windows")]
     let cache_path = choose_windows_cache_path(&app_dirs.cache_dir.join("cache"));
@@ -837,6 +838,15 @@ fn setup_invoke_handlers(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         crate::handlers::message::delete_message,
         crate::handlers::recorder::get_recorder_list,
         crate::handlers::recorder::add_recorder,
+        crate::handlers::wechat_capture::wechat_capture_status,
+        crate::handlers::wechat_capture::wechat_capture_install_ca,
+        crate::handlers::wechat_capture::wechat_capture_remove_ca,
+        crate::handlers::wechat_capture::wechat_capture_start,
+        crate::handlers::wechat_capture::wechat_capture_stop,
+        crate::handlers::wechat_capture::wechat_capture_preview,
+        crate::handlers::wechat_monitor::wechat_monitor_status,
+        crate::handlers::wechat_monitor::wechat_monitor_start,
+        crate::handlers::wechat_monitor::wechat_monitor_stop,
         crate::handlers::recorder::remove_recorder,
         crate::handlers::recorder::reload_recorder,
         crate::handlers::recorder::get_room_info,
@@ -914,6 +924,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     let _ = fix_path_env::fix();
+    recorder::platforms::wechat::capture::install_crypto_provider();
 
     let builder = tauri::Builder::default().plugin(tauri_plugin_deep_link::init());
     let builder = setup_plugins(builder);
@@ -922,6 +933,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     builder
         .setup(|app| {
+            let capture_dir = platform_dirs::AppDirs::new(Some(crate::constants::APP_DATA_ID), false)
+                .unwrap()
+                .config_dir
+                .join("wechat-capture");
+            // Repairs the system proxy if the previous run ended while capturing.
+            recorder::platforms::wechat::capture::recover_after_crash(&capture_dir);
+            app.manage(recorder::platforms::wechat::capture::WechatCapture::new(capture_dir));
+            app.manage(std::sync::Arc::new(
+                crate::handlers::wechat_monitor::WechatMonitor::default(),
+            ));
             tauri::async_runtime::block_on(async {
                 let state = setup_app_state(app).await?;
                 let _ = tray::create_tray(app.handle());
@@ -967,8 +988,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 // stop all recorders
                 let recorder_manager = app_handle.state::<State>().recorder_manager.clone();
+                let capture = app_handle
+                    .state::<std::sync::Arc<recorder::platforms::wechat::capture::WechatCapture>>()
+                    .inner()
+                    .clone();
                 log::info!("Stopping all recorders...");
                 tauri::async_runtime::block_on(async move {
+                    if let Err(error) = capture.stop().await {
+                        log::warn!("Failed to stop WeChat capture on exit: {error}");
+                    }
                     recorder_manager.stop_all().await;
                 });
                 log::info!("All recorders stopped successfully.");

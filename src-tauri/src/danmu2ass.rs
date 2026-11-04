@@ -123,11 +123,20 @@ fn format_time(seconds: f64) -> String {
 }
 
 fn escape_text(text: &str) -> String {
-    text.replace('\\', "\\\\")
-        .replace('{', "｛")
-        .replace('}', "｝")
-        .replace('\r', "")
-        .replace('\n', "\\N")
+    let mut escaped = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '\\' => escaped.push_str("\\\\"),
+            '{' => escaped.push('｛'),
+            '}' => escaped.push('｝'),
+            '\n' => escaped.push_str("\\N"),
+            // Recorded messages may contain NUL or other C0/C1 controls.
+            // Only tabs are accepted literally by the native ASS parser.
+            c if c.is_control() && c != '\t' => {}
+            c => escaped.push(c),
+        }
+    }
+    escaped
 }
 
 fn normal_danmaku() -> impl FnMut(f64, f64, f64, bool) -> Option<DanmakuPosition> {
@@ -239,5 +248,35 @@ fn normal_danmaku() -> impl FnMut(f64, f64, f64, bool) -> Option<DanmakuPosition
             top: best.p,
             time: ts,
         })
+    }
+}
+
+// Backported from upstream #474; native-overlay tests do not apply to this fork.
+#[cfg(test)]
+mod upstream_escape_text_tests {
+    use super::escape_text;
+    #[test]
+    fn test_escape_text_control_characters() {
+        for code in (0..=0x1f).chain(0x7f..=0x9f) {
+            let control = char::from_u32(code).unwrap();
+            let expected = match control {
+                '\n' => "before\\Nafter",
+                '\t' => "before\tafter",
+                _ => "beforeafter",
+            };
+            assert_eq!(
+                escape_text(&format!("before{control}after")),
+                expected,
+                "U+{code:04X}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_escape_text_preserves_unicode_and_ass_escaping() {
+        assert_eq!(
+            escape_text("中\0文👩🏽‍💻\u{85}❤️e\u{301}{\\N}\r\n\t尾"),
+            "中文👩🏽‍💻❤️e\u{301}｛\\\\N｝\\N\t尾"
+        );
     }
 }

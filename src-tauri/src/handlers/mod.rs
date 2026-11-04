@@ -6,6 +6,10 @@ pub mod recorder;
 pub mod task;
 pub mod utils;
 pub mod video;
+#[cfg(feature = "gui")]
+pub mod wechat_capture;
+#[cfg(feature = "gui")]
+pub mod wechat_monitor;
 
 use crate::database::account::AccountRow;
 

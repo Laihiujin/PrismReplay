@@ -226,11 +226,17 @@ pub async fn add_recorder(
     mut extra: String,
 ) -> Result<RecorderRow, String> {
     let platform_str = platform;
-    let platform = PlatformType::from_str(&platform_str).unwrap();
+    let platform = PlatformType::from_str(&platform_str).map_err(|_| "不支持的平台".to_string())?;
     if matches!(platform, PlatformType::Xiaohongshu | PlatformType::Weibo) {
         return Err("平台暂未支持".to_string());
     }
     let mut room_id = room_id;
+    if platform == PlatformType::Wechat {
+        let input = if extra.trim().is_empty() { &room_id } else { &extra };
+        let source = recorder::platforms::wechat::source::WechatSource::parse(input)?;
+        room_id = source.room_id();
+        extra = source.to_extra()?;
+    }
     if platform == PlatformType::Kuaishou {
         let normalized = normalize_kuaishou_room_id(&room_id);
         if normalized != room_id {
@@ -311,6 +317,7 @@ pub async fn add_recorder(
                 Ok(Account::default())
             }
         }
+        PlatformType::Wechat => Ok(Account::default()),
         PlatformType::Weibo => Err("微博暂未支持".to_string()),
         PlatformType::Xiaohongshu => Err("小红书暂未支持".to_string()),
         _ => Err("不支持的平台".to_string()),
@@ -480,6 +487,7 @@ pub async fn reload_recorder(
                 Ok(Account::default())
             }
         }
+        PlatformType::Wechat => Ok(Account::default()),
         PlatformType::Weibo => Err("微博暂未支持".to_string()),
         PlatformType::Xiaohongshu => Err("小红书暂未支持".to_string()),
         _ => Err("不支持的平台".to_string()),

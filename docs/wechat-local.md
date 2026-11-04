@@ -1,0 +1,76 @@
+# 视频号本地适配（隔离测试版）
+
+## 使用范围
+
+在「直播间 → 添加 → 视频号」粘贴自己有权保存的媒体地址或单条资源 JSON。
+
+- 接受腾讯 CDN 的 HTTP(S) m3u8 / flv / mp4 地址，以及视频号 stodownload 地址。
+- wechatVideoDownload：使用其「复制链接」结果。
+- res-downloader：接受 `MediaInfo` 的 `Url` / `Description`，或 `objectDesc.media[0].url` 与不透明 `urlToken`。保留签名查询串，不把它写入房间 ID。
+- 录制沿用现有 HLS 缓存、录像、预览和切片流程；流结束或失败后停止，避免循环下载回放或反复请求过期链接。重新录制需手动启用；签名过期时需要重新捕获并添加地址。
+- 分享页不能当作媒体地址。不注入微信、不读取微信账号，也没有复制参考项目的二进制。没有提供视频号弹幕、开播监控或加密视频解密；JSON 标记有解密密钥时明确拒绝。仅有直链但实际加密的媒体会录制失败。
+- 同一路径更换签名仍使用相同房间 ID；新地址需要移除并重新添加该录制源，历史录像不会因此重新抓取。
+
+## 自动抓取直播地址（仅 Windows）
+
+视频号直播间没有可复制的链接，流地址只出现在微信的网络请求里。在「直播间 → 添加 → 视频号」里：
+
+1. 首次使用点「安装证书」，并在 Windows 的提示里确认。
+2. 点「开始抓取」，再到电脑版微信进入直播间（已在直播间就退出重进）。
+3. 列表出现地址后点「使用这个」，抓取自动停止并填入地址，然后添加录制。
+
+安全边界：
+
+- 证书在本机生成，私钥保存在应用配置目录的 `wechat-capture` 下，并通过 X.509 名称约束限定只能用于 qq.com、myqcloud.com、qcloud.com、qcloudcdn.com、wxlivecdn.com。域名列表变化时证书会换新，需要重新确认安装，旧证书会一并移除。安装到当前用户的受信任根证书，可随时点「移除证书」。
+- 只解密上述域名，其他网站的连接原样转发，不读取内容。
+- 只在开始与停止之间接管当前用户的系统代理，最长 10 分钟。原值先写入磁盘，停止或退出时恢复；异常退出后下次启动时恢复。如果这期间软件没有再打开而网络异常，手动关闭系统代理即可。其他工具后来改过的代理设置不会被覆盖。
+- 抓取期间其他软件不经过你原来的代理。系统使用 PAC 时拒绝启动。
+- 带签名的地址只显示在本机界面，不写入日志。
+- 抓取期间会读取腾讯域名返回的 JSON，只从提到该直播流的对象里取主播名和标题，只保存在内存里。主播名也会从微信当前直播页的标题（“某某的直播”）读取，只读页面名称，不读聊天内容；刚切换直播间时可能对不上，可以在列表里手动改。预览帧由 ffmpeg 取得，选中后作为房间封面保存。
+
+未在真实直播上验证的部分：微信是否信任该证书。已知真实直播流来自 wxlivecdn.com；微信读取的是系统代理的连接设置（DefaultConnectionSettings），只改注册表的 ProxyServer 对它无效。没有抓到时，界面会列出经过代理的域名，可据此判断。
+
+## 监控指定主播（仅 Windows）
+
+微信没有公开的开播状态接口，只能在微信窗口里看。使用时在电脑版微信搜索主播名字并停在「名字 - 搜一搜」标签页，然后在视频号面板填写名字开始监控。
+
+- 每隔至少 5 分钟通过系统无障碍接口点一次该页的搜索按钮，读取结果里的「直播中」，不移动鼠标，也不调用微信接口。
+- 发现开播后：开始抓取、进入直播间、取地址里 `q=` 最大的流、恢复系统代理、添加录制。录制结束后要切回搜索标签页才能继续监控。
+- 监控只在本次运行期间有效，退出软件后需要重新开始。微信窗口要一直开着；微信改版可能失效，自动操作也有触发风控的可能。
+
+## 保护已有安装
+
+运行 `scripts/build-local.ps1`（可选 `-Profile release`），仅在当前检出目录生成 `src-tauri/target/local-artifacts`，不会运行安装程序。
+
+本地版同时使用 `isolated-build` 编译特性及 `tauri.local.conf.json`：
+
+- 标识为 `cn.prismreplay.localbuild`，数据库、WebView、配置、账号文件、日志以及默认缓存/输出均独立。
+- 不迁移、不导入 `cn.ShadowVerse` 的配置、账号、数据库或录像；账号文件不从当前工作目录或已安装目录寻找。
+- 独立深链 `prismreplay-local`，不会注册/接管正式版的 `bsr` 链接；静态媒体服务只监听回环地址。
+- 普通正式构建继续沿用原有数据标识，没有改名迁移历史数据。
+
+## 本地验证
+
+```powershell
+python scripts/tests/test_macos_architecture.py
+# 构建脚本自动加载 Rust、CMake、LLVM 路径；先安装 MSVC C++ 工作负载及 Windows SDK。
+pwsh -File scripts/build-local.ps1
+# 设置构建脚本所需 PATH 后，在 src-tauri 目录运行：
+cargo test --locked -p recorder wechat:: --lib
+cargo test --locked -p recorder captures_local_media_and_stops_without_retrying --lib -- --ignored --nocapture
+```
+
+架构参数回归使用命令契约替身，不代表已在 Windows 验证 macOS DMG 的挂载、签名或运行。媒体集成测试只生成并录制本机合成测试视频，不访问真实账号或直播间。
+
+## 上游筛选与冲突
+
+上游为 [Xinrea/bili-shadowreplay](https://github.com/Xinrea/bili-shadowreplay)。本分支没有盲目合入其 274 个差异提交，避免把新版原生渲染器、FFmpeg 架构、数据迁移及产品身份覆盖到当前分支。
+
+- `51789514f8fbc194f4399e73a393b391d6ecdeb8`（#474）：已 cherry-pick。手动解决 `danmu2ass.rs` 冲突，保留本分支渲染接口，合入控制字符清理以及两个适用回归测试；未引入不存在的 native-overlay API。
+- `7656d7b74865e01fb3ac7b7faa11d4517adacd4d`（#457）：把关闭 macOS Whisper OpenMP 的修复适配到现有 `macos-portable.cmake`，不引入不同的 whisper-cpp-rs 包结构。
+- PR #6：修正 arm64 / x86_64 / universal 三个 `lipo` 分支的参数顺序，输入文件必须位于可变长架构参数之前。
+
+## 参考出处
+
+- [qiye45/wechatVideoDownload](https://github.com/qiye45/wechatVideoDownload)：公开仓库主要提供使用说明与示例，用于确认复制媒体链接的交互，不把它当作可直接合并的源码。
+- [putyy/res-downloader](https://github.com/putyy/res-downloader)：参考资源字段格式（`core/shared/base.go` 与 `core/plugins/plugin.qq.com.go`）。本适配器为独立实现，没有复制其代理或脚本注入实现。

@@ -21,6 +21,7 @@
   import HuyaIcon from "../lib/components/HuyaIcon.svelte";
   import TikTokIcon from "../lib/components/TikTokIcon.svelte";
   import AutoRecordIcon from "../lib/components/AutoRecordIcon.svelte";
+  import WechatCapturePanel from "../lib/components/WechatCapturePanel.svelte";
   import GenerateWholeClipModal from "../lib/components/GenerateWholeClipModal.svelte";
   import { onMount, onDestroy } from "svelte";
 
@@ -190,6 +191,7 @@
       huya: "/imgs/huya_avatar.png",
       kuaishou: "/imgs/kuaishou.svg",
       tiktok: "/imgs/Tiktok.svg",
+      wechat: "/imgs/wechat.svg",
     };
     return avatarMap[platform] || "/imgs/huya_avatar.png";
   }
@@ -201,6 +203,7 @@
       huya: "/imgs/huya.png",
       kuaishou: "/imgs/kuaishou.svg",
       tiktok: "/imgs/Tiktok.svg",
+      wechat: "/imgs/wechat.svg",
     };
     return coverMap[platform] || "/imgs/huya.png";
   }
@@ -250,6 +253,7 @@
     cover_last_key.set(room_id, next_key);
   }
   async function get_image_url(room_id: string, url: string) {
+    if (url.startsWith("data:")) return url;
     const cache_key = build_cover_cache_key(room_id, url);
     if (image_cache.has(cache_key)) {
       return image_cache.get(cache_key);
@@ -386,7 +390,10 @@
         selectedPlatform === "bilibili" || selectedPlatform === "douyin" || selectedPlatform === "huya";
       const needsAlphanumeric = selectedPlatform === "kuaishou";
 
-      if (!normalizedRoomId) {
+      if (selectedPlatform === "wechat") {
+        addValid = trimmed.length > 0 && trimmed.length <= 131072 && (/^https?:\/\//i.test(trimmed) || trimmed.startsWith("{"));
+        addErrorMsg = trimmed && !addValid ? "请粘贴媒体直链或单条资源 JSON" : "";
+      } else if (!normalizedRoomId) {
         addValid = false;
         addErrorMsg = "";
       } else if (needsNumeric && !/^\d+$/.test(normalizedRoomId)) {
@@ -650,6 +657,8 @@
         ? room.room_info.room_id
         : `@${room.room_info.room_id}`;
       open(`https://www.tiktok.com/${handle}/live`);
+    } else if (room.room_info.platform === "wechat") {
+      open("https://channels.weixin.qq.com/");
     } else if (room.room_info.platform === "huya") {
       open("https://www.huya.com/" + room.room_info.room_id);
     }
@@ -790,6 +799,7 @@
   }
 
   function normalizeRoomInput(raw: string, platform: string) {
+    if (platform === "wechat") return { roomId: raw.trim(), platform };
     const parsed = parseRoomInput(raw);
     const trimmed = raw.trim();
     const parsedRoomId =
@@ -890,7 +900,7 @@
   }
 
   function addNewRecorder(room_id: string, platform: string, extra: string) {
-    if (extra.includes("?")) {
+    if (platform !== "wechat" && extra.includes("?")) {
       extra = extra.split("?")[0];
     }
 
@@ -1232,6 +1242,8 @@
                     <HuyaIcon class="w-4 h-4" />
                   {:else if room.room_info.platform === "tiktok"}
                     <TikTokIcon class="w-5 h-5" />
+                  {:else if room.room_info.platform === "wechat"}
+                    <img src="/imgs/wechat.svg" alt="视频号" class="w-5 h-5" />
                   {:else}
                     <Globe class="w-4 h-4 text-gray-400" />
                   {/if}
@@ -1431,7 +1443,7 @@
               平台
             </div>
             <div
-              class="grid grid-cols-5 gap-2 p-0.5 bg-[#f5f5f7] dark:bg-[#1c1c1e] rounded-lg"
+              class="grid grid-cols-3 gap-2 p-0.5 bg-[#f5f5f7] dark:bg-[#1c1c1e] rounded-lg"
               role="group"
               aria-labelledby="platform-label"
             >
@@ -1480,6 +1492,10 @@
               >
                 TikTok
               </button>
+              <button
+                class="px-3 py-2 text-sm font-medium rounded-md transition-colors {selectedPlatform === 'wechat' ? 'bg-white dark:bg-[#323234] shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}"
+                on:click={() => { selectedPlatform = "wechat"; batchMode = false; }}
+              >视频号</button>
             </div>
           </div>
 
@@ -1510,7 +1526,7 @@
                 ? 'bg-white dark:bg-[#323234] shadow-sm text-gray-900 dark:text-white'
                 : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}"
                 on:click={() => {
-                  batchMode = true;
+                  if (selectedPlatform !== "wechat") batchMode = true;
                 }}
               >
                 批量
@@ -1523,13 +1539,23 @@
               for="room_id"
               class="block text-sm font-medium text-gray-700 dark:text-gray-300"
             >
-              {selectedPlatform === "kuaishou" || selectedPlatform === "tiktok"
+              {selectedPlatform === "wechat" ? "媒体直链 / 资源 JSON" : selectedPlatform === "kuaishou" || selectedPlatform === "tiktok"
                 ? "直播间链接"
                 : selectedPlatform === "bilibili" || selectedPlatform === "douyin"
                   ? "直播间链接/ID"
                   : "直播间ID"}
             </label>
-            {#if batchMode}
+            {#if selectedPlatform === "wechat"}
+              <WechatCapturePanel on:select={(event) => (addRoom = event.detail)} />
+              <textarea
+                id="room_id" rows="5" bind:value={addRoom}
+                class="w-full px-3 py-2 bg-[#f5f5f7] dark:bg-[#1c1c1e] border-0 rounded-lg focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-white"
+                placeholder="点上方自动抓取后这里会自动填入；也可以粘贴 m3u8 / flv / mp4 直链或单条资源 JSON"
+              ></textarea>
+              <p class="text-xs text-gray-500 dark:text-gray-400">
+                请只录制您有权保存的内容。也兼容 wechatVideoDownload 的复制链接和 res-downloader 的资源 JSON。不支持分享页直解、加密短视频或弹幕。流结束或失败后自动停止，链接过期后需要重新抓取。
+              </p>
+            {:else if batchMode}
               <textarea
                 id="room_id"
                 rows="6"

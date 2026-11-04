@@ -37,6 +37,12 @@ sha2 = "0.10.9"
 toml = "0.7.3"
 aes = "0.8.4"
 cbc = "0.1.2"
+hudsucker = { version = "0.25", default-features = false, features = ["decoder", "rcgen-ca", "rustls-client", "http2"] }
+http-body-util = "0.1"
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring", "x509-parser"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Networking_WinInet"] }
 
 [dev-dependencies]
 env_logger = "0.11"
