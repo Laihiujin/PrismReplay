@@ -14,6 +14,7 @@ fn main() {
     {
         println!("cargo:rustc-link-arg=/DELAYLOAD:cublas64_12.dll");
         println!("cargo:rustc-link-arg=/DELAYLOAD:cublasLt64_12.dll");
+        println!("cargo:rustc-link-arg=/DELAYLOAD:nvcuda.dll");
         println!("cargo:rustc-link-arg=delayimp.lib");
     }
     #[cfg(feature = "gui")]

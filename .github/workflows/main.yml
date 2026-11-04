@@ -169,6 +169,10 @@ jobs:
           REQUIRE_CUDA_BUILD: "1"
         run: .\build.ps1
 
+      - name: Test CUDA dependency validation
+        shell: powershell
+        run: .\scripts\tests\test_cuda_imports.ps1
+
       - name: Check the CUDA build starts without cublas
         shell: powershell
         run: |
@@ -178,20 +182,21 @@ jobs:
             Select-Object -First 1
           $dependents = (& $dumpbin.FullName /dependents src-tauri/target/release/LIVE.exe) -join "`n"
           Write-Host $dependents
-          $delayed = ($dependents -split 'delay load dependencies')[1]
-          if (-not $delayed -or $delayed -notmatch 'cublas64_12\.dll' -or $delayed -notmatch 'cublasLt64_12\.dll') {
-            throw 'cublas is not delay-loaded.'
-          }
+          if ($LASTEXITCODE -ne 0) { throw 'dumpbin failed to inspect LIVE.exe.' }
+          . .\scripts\verify-cuda-imports.ps1
+          $null = Assert-CudaDelayImports -Dependents $dependents
+          $runtime = Get-ChildItem src-tauri -Filter 'cudart64*.dll' -File | Select-Object -First 1
+          if (-not $runtime) { throw 'CUDA runtime resource is missing.' }
+          .\scripts\test-cuda-startup.ps1 -Binary src-tauri/target/release/LIVE.exe -CudaRuntime $runtime.FullName
 
-          if (Test-Path src-tauri/target/release/cublas64_12.dll) {
-            throw 'cublas was copied next to the binary, so this check would prove nothing.'
+      - name: Verify installed CPU and CUDA applications start
+        shell: powershell
+        run: |
+          foreach ($flavour in @('cpu', 'cuda')) {
+            $installer = Get-ChildItem src-tauri/target -Filter "LIVE-${flavour}_*_x64-setup.exe" -File | Select-Object -First 1
+            if (-not $installer) { throw "Missing $flavour installer." }
+            .\scripts\test-windows-installer.ps1 -Installer $installer.FullName
           }
-          $app = Start-Process src-tauri/target/release/LIVE.exe -PassThru
-          Start-Sleep -Seconds 20
-          if ($app.HasExited) {
-            throw "LIVE.exe exited during startup with code $($app.ExitCode)."
-          }
-          Stop-Process -Id $app.Id -Force
 
       - name: Report package sizes
         shell: powershell
