@@ -1,8 +1,13 @@
 //! Douyin QR login driven through a hidden app webview.
 //!
 //! Douyin signs its passport requests inside the page runtime, so calling those endpoints directly
-//! is rejected. Instead this opens the real creator-center login page in a hidden, private webview,
-//! shows the page's own QR code in the app, and reads the session cookies once the user has scanned.
+//! is rejected. Instead this opens the real creator-center login page in a hidden webview, shows the
+//! page's own QR code in the app, and reads the session cookies once the user has scanned.
+//!
+//! The webview shares the built-in browser's persistent profile. A throwaway profile looks like a
+//! new device on every login, which sends Douyin into SMS verification and risk control. It also
+//! means a session already logged in there is imported without a scan.
+//!
 //! The window is revealed only when Douyin asks for a verification that has to be done by hand.
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -148,13 +153,10 @@ pub async fn start(app: &AppHandle) -> Result<PlatformQrInfo, String> {
     let label = format!("douyin-qr-{id}");
     let key = format!("{KEY_PREFIX}{id}");
     let login_url = Url::parse(LOGIN_URL).map_err(|e| format!("Invalid login URL: {e}"))?;
-    // Private storage so an account logged in earlier cannot skip the QR page, and so nothing
-    // from this login outlives the window.
     let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(login_url))
         .title("抖音 登录验证")
         .inner_size(1100.0, 800.0)
         .visible(false)
-        .incognito(true)
         .initialization_script(MUTE_SCRIPT)
         .build()
         .map_err(|e| format!("打开内置浏览器失败: {e}"))?;
@@ -163,8 +165,13 @@ pub async fn start(app: &AppHandle) -> Result<PlatformQrInfo, String> {
     let qr = loop {
         if let Some(probe) = probe(&window).await {
             if !probe.qr.is_empty() {
-                break probe.qr;
+                break Some(probe.qr);
             }
+        }
+        // No QR page is coming if the profile is logged in; `poll` imports the session.
+        let (_, _, has_login) = collect_douyin_webview_cookies(&window)?;
+        if has_login && window.url().is_ok_and(|url| !is_login_url(&url)) {
+            break None;
         }
         if Instant::now() >= deadline {
             let _ = window.close();
@@ -177,7 +184,7 @@ pub async fn start(app: &AppHandle) -> Result<PlatformQrInfo, String> {
         key: key.clone(),
         label,
         started: Instant::now(),
-        qr: qr.clone(),
+        qr: qr.clone().unwrap_or_default(),
         scanned_at: None,
         logged_in_at: None,
         revealed: false,
@@ -200,7 +207,7 @@ pub async fn start(app: &AppHandle) -> Result<PlatformQrInfo, String> {
     Ok(PlatformQrInfo {
         oauth_key: key,
         url: None,
-        image: Some(qr),
+        image: qr,
     })
 }
 

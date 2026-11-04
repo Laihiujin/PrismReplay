@@ -257,6 +257,14 @@ function toggleDropdown(uid) {
       qr_image = qr_info.image || "";
       qr_url = qr_info.url || "";
 
+      // The built-in browser is already logged in, so there is nothing to scan.
+      if (!qr_image && oauth_key.startsWith("webview:")) {
+        qr_notice = "内置浏览器已登录，正在导入账号";
+        check_qr_once();
+        check_interval = setInterval(check_qr, check_interval_ms);
+        return;
+      }
+
       if (qr_image) {
         if (auto_qr_poll) {
           if (selectedPlatform === "tiktok") {
