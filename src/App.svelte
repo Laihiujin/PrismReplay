@@ -56,7 +56,7 @@
         return;
       }
 
-      const url = urls[0];
+      const url = urls[0].replace("prismreplay://", "bsr://");
       let platform = "";
       let room_id = "";
 

@@ -22,14 +22,14 @@
   },
   "productName": "PrismReplay",
   "version": "../package.json",
-  "identifier": "cn.ShadowVerse",
+  "identifier": "cn.prismreplay",
   "plugins": {
     "sql": {
       "preload": ["sqlite:data_v2.db"]
     },
     "deep-link": {
       "desktop": {
-        "schemes": ["bsr"]
+        "schemes": ["prismreplay"]
       }
     }
   },

@@ -7,6 +7,7 @@ on:
 
 jobs:
   build-artifacts:
+    if: false
     strategy:
       fail-fast: false
       matrix:
@@ -149,7 +150,7 @@ jobs:
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@v0.2.24
         with:
-          cuda: "12.4.0"
+          cuda: "12.8.0"
           method: network
           sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "visual_studio_integration"]'
 
