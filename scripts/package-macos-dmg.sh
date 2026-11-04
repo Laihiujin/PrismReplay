@@ -70,7 +70,11 @@ EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$PLIST")"
 case "$TARGET" in
   aarch64-apple-darwin) lipo "$INSTALLED_APP/Contents/MacOS/$EXECUTABLE" -verify_arch arm64 ;;
   x86_64-apple-darwin) lipo "$INSTALLED_APP/Contents/MacOS/$EXECUTABLE" -verify_arch x86_64 ;;
-  universal-apple-darwin) lipo "$INSTALLED_APP/Contents/MacOS/$EXECUTABLE" -verify_arch arm64 x86_64 ;;
+  universal-apple-darwin)
+    # Verify each architecture separately; native lipo misparses the combined form.
+    lipo "$INSTALLED_APP/Contents/MacOS/$EXECUTABLE" -verify_arch arm64 &&
+      lipo "$INSTALLED_APP/Contents/MacOS/$EXECUTABLE" -verify_arch x86_64
+    ;;
 esac
 hdiutil detach "$MOUNT_DIR"
 rmdir "$MOUNT_DIR"
