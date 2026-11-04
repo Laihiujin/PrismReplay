@@ -100,7 +100,7 @@ fn choose_windows_output_path(default_output: &Path) -> PathBuf {
     for drive in b'D'..=b'Z' {
         let root = format!("{}:\\", drive as char);
         if Path::new(&root).exists() {
-            return PathBuf::from(root).join("cn.ShadowVerse").join("output");
+            return PathBuf::from(root).join(crate::constants::APP_DATA_ID).join("output");
         }
     }
 
@@ -118,7 +118,7 @@ fn choose_windows_cache_path(default_cache: &Path) -> PathBuf {
     for drive in b'D'..=b'Z' {
         let root = format!("{}:\\", drive as char);
         if Path::new(&root).exists() {
-            return PathBuf::from(root).join("cn.ShadowVerse").join("cache");
+            return PathBuf::from(root).join(crate::constants::APP_DATA_ID).join("cache");
         }
     }
 
@@ -512,7 +512,7 @@ async fn setup_server_state(args: Args) -> Result<State, Box<dyn std::error::Err
     let (cache_path, output_path) = {
         #[cfg(target_os = "windows")]
         {
-            let app_dirs = platform_dirs::AppDirs::new(Some("cn.ShadowVerse"), false).unwrap();
+            let app_dirs = platform_dirs::AppDirs::new(Some(crate::constants::APP_DATA_ID), false).unwrap();
             (
                 choose_windows_cache_path(&app_dirs.cache_dir.join("cache")),
                 choose_windows_output_path(&app_dirs.data_dir.join("output")),
@@ -630,7 +630,7 @@ async fn setup_app_state(app: &tauri::App) -> Result<State, Box<dyn std::error::
     setup_logging(&log_dir).await?;
 
     log::info!("Setting up app state...");
-    let app_dirs = AppDirs::new(Some("cn.ShadowVerse"), false).unwrap();
+    let app_dirs = AppDirs::new(Some(crate::constants::APP_DATA_ID), false).unwrap();
     let config_path = app_dirs.config_dir.join("Conf.toml");
     #[cfg(target_os = "windows")]
     let cache_path = choose_windows_cache_path(&app_dirs.cache_dir.join("cache"));

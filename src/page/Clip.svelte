@@ -295,6 +295,8 @@
         return "快手";
       case "tiktok":
         return "TikTok";
+      case "wechat":
+        return "视频号";
       case "youtube":
         return "YouTube";
       case "imported":

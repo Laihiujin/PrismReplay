@@ -25,6 +25,7 @@ pub struct FlvRecorder {
     enabled: Arc<AtomicBool>,
     event_channel: broadcast::Sender<RecorderEvent>,
     live_id: String,
+    use_proxy: bool,
 }
 
 impl FlvRecorder {
@@ -43,7 +44,14 @@ impl FlvRecorder {
             enabled,
             event_channel,
             live_id,
+            use_proxy: true,
         }
+    }
+
+    /// Isolate imported WeChat sources from TikTok-specific proxy settings.
+    pub fn without_proxy(mut self) -> Self {
+        self.use_proxy = false;
+        self
     }
 
     fn build_header_string(&self) -> String {
@@ -99,7 +107,7 @@ impl FlvRecorder {
         #[cfg(target_os = "windows")]
         cmd.creation_flags(CREATE_NO_WINDOW);
 
-        if let Some(proxy_url) = Self::resolve_proxy_url() {
+        if let Some(proxy_url) = self.use_proxy.then(Self::resolve_proxy_url).flatten() {
             log::info!("ffmpeg using proxy: {}", proxy_url);
             cmd.args(["-http_proxy", &proxy_url]);
         }
@@ -127,6 +135,7 @@ impl FlvRecorder {
             playlist_path.to_string_lossy().as_ref(),
             "-y",
         ])
+        .kill_on_drop(true)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());

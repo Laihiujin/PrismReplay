@@ -371,12 +371,16 @@ fn default_kuaishou_enable_public_page_fallback() -> bool {
 }
 
 fn locate_accounts_file(name: &str) -> Option<PathBuf> {
+    if cfg!(feature = "isolated-build") {
+        let dirs = platform_dirs::AppDirs::new(Some(crate::constants::APP_DATA_ID), false)?;
+        return [dirs.config_dir.join(name), dirs.data_dir.join(name)].into_iter().find(|p| p.exists());
+    }
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(cwd) = env::current_dir() {
         candidates.push(cwd.join("src-tauri").join(name));
         candidates.push(cwd.join(name));
     }
-    if let Some(app_dirs) = platform_dirs::AppDirs::new(Some("cn.ShadowVerse"), false) {
+    if let Some(app_dirs) = platform_dirs::AppDirs::new(Some(crate::constants::APP_DATA_ID), false) {
         candidates.push(app_dirs.config_dir.join(name));
         candidates.push(app_dirs.data_dir.join(name));
     }
@@ -393,12 +397,17 @@ pub(crate) fn resolve_accounts_file_write_path() -> PathBuf {
     if let Some(path) = locate_accounts_file("accounts.toml") {
         return path;
     }
+    if cfg!(feature = "isolated-build") {
+        if let Some(dirs) = platform_dirs::AppDirs::new(Some(crate::constants::APP_DATA_ID), false) {
+            return dirs.config_dir.join("accounts.toml");
+        }
+    }
     if let Some(example_path) = locate_accounts_file("accounts.example.toml") {
         if let Some(parent) = example_path.parent() {
             return parent.join("accounts.toml");
         }
     }
-    if let Some(app_dirs) = platform_dirs::AppDirs::new(Some("cn.ShadowVerse"), false) {
+    if let Some(app_dirs) = platform_dirs::AppDirs::new(Some(crate::constants::APP_DATA_ID), false) {
         return app_dirs.config_dir.join("accounts.toml");
     }
     if let Ok(cwd) = env::current_dir() {
