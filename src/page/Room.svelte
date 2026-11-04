@@ -21,6 +21,7 @@
   import HuyaIcon from "../lib/components/HuyaIcon.svelte";
   import TikTokIcon from "../lib/components/TikTokIcon.svelte";
   import AutoRecordIcon from "../lib/components/AutoRecordIcon.svelte";
+  import WechatCapturePanel from "../lib/components/WechatCapturePanel.svelte";
   import GenerateWholeClipModal from "../lib/components/GenerateWholeClipModal.svelte";
   import { onMount, onDestroy } from "svelte";
 
@@ -1544,13 +1545,14 @@
                   : "直播间ID"}
             </label>
             {#if selectedPlatform === "wechat"}
+              <WechatCapturePanel on:select={(event) => (addRoom = event.detail)} />
               <textarea
                 id="room_id" rows="5" bind:value={addRoom}
                 class="w-full px-3 py-2 bg-[#f5f5f7] dark:bg-[#1c1c1e] border-0 rounded-lg focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-white"
-                placeholder="粘贴参考工具复制的 m3u8 / flv / mp4 直链，或单条资源 JSON"
+                placeholder="点上方自动抓取后这里会自动填入；也可以粘贴 m3u8 / flv / mp4 直链或单条资源 JSON"
               ></textarea>
               <p class="text-xs text-gray-500 dark:text-gray-400">
-                使用您有权保存的媒体。兼容 wechatVideoDownload 的复制链接、res-downloader 的资源 JSON（Url / objectDesc）。不支持分享页直解、加密短视频或弹幕；不会安装证书、更改系统代理或监听微信。流结束或失败后自动停止，过期链接请重新捕获后添加。
+                请只录制您有权保存的内容。也兼容 wechatVideoDownload 的复制链接和 res-downloader 的资源 JSON。不支持分享页直解、加密短视频或弹幕。流结束或失败后自动停止，链接过期后需要重新抓取。
               </p>
             {:else if batchMode}
               <textarea

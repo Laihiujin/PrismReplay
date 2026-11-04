@@ -837,6 +837,11 @@ fn setup_invoke_handlers(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         crate::handlers::message::delete_message,
         crate::handlers::recorder::get_recorder_list,
         crate::handlers::recorder::add_recorder,
+        crate::handlers::wechat_capture::wechat_capture_status,
+        crate::handlers::wechat_capture::wechat_capture_install_ca,
+        crate::handlers::wechat_capture::wechat_capture_remove_ca,
+        crate::handlers::wechat_capture::wechat_capture_start,
+        crate::handlers::wechat_capture::wechat_capture_stop,
         crate::handlers::recorder::remove_recorder,
         crate::handlers::recorder::reload_recorder,
         crate::handlers::recorder::get_room_info,
@@ -914,6 +919,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     let _ = fix_path_env::fix();
+    recorder::platforms::wechat::capture::install_crypto_provider();
 
     let builder = tauri::Builder::default().plugin(tauri_plugin_deep_link::init());
     let builder = setup_plugins(builder);
@@ -922,6 +928,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     builder
         .setup(|app| {
+            let capture_dir = platform_dirs::AppDirs::new(Some(crate::constants::APP_DATA_ID), false)
+                .unwrap()
+                .config_dir
+                .join("wechat-capture");
+            // Repairs the system proxy if the previous run ended while capturing.
+            recorder::platforms::wechat::capture::recover_after_crash(&capture_dir);
+            app.manage(recorder::platforms::wechat::capture::WechatCapture::new(capture_dir));
             tauri::async_runtime::block_on(async {
                 let state = setup_app_state(app).await?;
                 let _ = tray::create_tray(app.handle());
@@ -967,8 +980,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 // stop all recorders
                 let recorder_manager = app_handle.state::<State>().recorder_manager.clone();
+                let capture = app_handle
+                    .state::<std::sync::Arc<recorder::platforms::wechat::capture::WechatCapture>>()
+                    .inner()
+                    .clone();
                 log::info!("Stopping all recorders...");
                 tauri::async_runtime::block_on(async move {
+                    if let Err(error) = capture.stop().await {
+                        log::warn!("Failed to stop WeChat capture on exit: {error}");
+                    }
                     recorder_manager.stop_all().await;
                 });
                 log::info!("All recorders stopped successfully.");

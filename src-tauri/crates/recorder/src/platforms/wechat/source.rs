@@ -1,4 +1,4 @@
-//! Import explicitly supplied media URLs; never change system proxies or trust stores.
+//! Parse media URLs supplied by the user or by the opt-in capture in `capture.rs`.
 //! Compatible with res-downloader's MediaInfo and video-channel objectDesc JSON.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -8,6 +8,9 @@ use url::Url;
 pub struct WechatSource {
     pub url: String,
     pub title: String,
+    /// Observed as a live stream by the capture proxy, so its path need not end in an extension.
+    #[serde(default)]
+    pub captured_stream: bool,
 }
 
 impl WechatSource {
@@ -16,9 +19,14 @@ impl WechatSource {
         if input.is_empty() || input.len() > 131_072 {
             return Err("请粘贴视频号媒体直链或单条资源 JSON（不超过 128KB）".into());
         }
+        let mut captured_stream = false;
         let (raw_url, title) = if input.starts_with('{') {
             let value: Value = serde_json::from_str(input)
                 .map_err(|_| "资源 JSON 无效，请复制单条资源对象".to_string())?;
+            captured_stream = value
+                .get("captured_stream")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let desc = value
                 .pointer("/data/object/objectDesc")
                 .or_else(|| value.get("objectDesc"))
@@ -76,16 +84,18 @@ impl WechatSource {
             return Err("请使用参考工具捕获的腾讯/微信 CDN 媒体直链，而非分享页或其他站点".into());
         }
         let path = url.path().to_ascii_lowercase();
-        if !(path.ends_with(".m3u8")
-            || path.ends_with(".flv")
-            || path.ends_with(".mp4")
-            || path.ends_with("/stodownload"))
+        if !captured_stream
+            && !(path.ends_with(".m3u8")
+                || path.ends_with(".flv")
+                || path.ends_with(".mp4")
+                || path.ends_with("/stodownload"))
         {
             return Err("请复制 m3u8/flv/mp4 媒体直链，不支持用视频号分享页直接解析".into());
         }
         Ok(Self {
             url: raw_url,
             title: title.chars().take(160).collect(),
+            captured_stream,
         })
     }
 
@@ -136,6 +146,19 @@ mod tests {
         let source = WechatSource::parse(r#"{"objectDesc":{"description":"直播","media":[{"url":"https://wxapp.tc.qq.com/live/a.m3u8?x=1","urlToken":"&token=A%2FB"}]}}"#).unwrap();
         assert!(source.url.ends_with("?x=1&token=A%2FB"));
         assert_eq!(source.title, "直播");
+    }
+
+    #[test]
+    fn captured_stream_without_extension_survives_saving() {
+        let input = r#"{"url":"https://live.video.qq.com/stream?sig=1","title":"直播","captured_stream":true}"#;
+        let source = WechatSource::parse(input).unwrap();
+        let saved = WechatSource::parse(&source.to_extra().unwrap()).unwrap();
+        assert_eq!(saved.url, "https://live.video.qq.com/stream?sig=1");
+        assert!(saved.captured_stream);
+        // The host restriction still applies to captured streams.
+        assert!(WechatSource::parse(r#"{"url":"https://evil.test/stream","captured_stream":true}"#).is_err());
+        // Without the capture flag an extensionless URL is still rejected.
+        assert!(WechatSource::parse("https://live.video.qq.com/stream?sig=1").is_err());
     }
 
     #[test]
