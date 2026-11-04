@@ -18,13 +18,25 @@ foreach ($line in $devEnvironment) {
 }
 $ninjaBin = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja'
 $env:PATH = "$cargoBin;$cmakeBin;$ninjaBin;$(Join-Path $root 'src-tauri');$env:PATH"
-$libclang = Get-ChildItem -LiteralPath (Join-Path $vs 'VC\Tools\Llvm') -Recurse -Filter libclang.dll -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $libclang -and $env:LIBCLANG_PATH) { $libclang = Get-Item -LiteralPath (Join-Path $env:LIBCLANG_PATH 'libclang.dll') -ErrorAction SilentlyContinue }
-if (-not $libclang) {
-    # Fallback: libclang from the pip wheel unpacked next to this checkout.
-    $libclang = Get-Item -LiteralPath (Join-Path (Split-Path $root -Parent) 'python-libclang\clang\native\libclang.dll') -ErrorAction SilentlyContinue
+# Only load a DLL for this x64 build host; the VS component also ships ARM64 DLLs.
+$clangCandidates = @(
+    $(if ($env:LIBCLANG_PATH) { Join-Path $env:LIBCLANG_PATH 'libclang.dll' }),
+    (Join-Path (Split-Path $root -Parent) 'python-libclang\clang\native\libclang.dll'),
+    (Join-Path $vs 'VC\Tools\Llvm\x64\bin\libclang.dll'),
+    (Join-Path $vs 'VC\Tools\Llvm\bin\libclang.dll')
+)
+$libclang = $null
+foreach ($candidate in $clangCandidates) {
+    if (-not $candidate -or -not (Test-Path -LiteralPath $candidate)) { continue }
+    $reader = [IO.BinaryReader]::new([IO.File]::OpenRead($candidate))
+    try {
+        $reader.BaseStream.Position = 0x3c
+        $peOffset = $reader.ReadInt32()
+        $reader.BaseStream.Position = $peOffset + 4
+        if ($reader.ReadUInt16() -eq 0x8664) { $libclang = Get-Item -LiteralPath $candidate; break }
+    } finally { $reader.Dispose() }
 }
-if (-not $libclang) { throw 'libclang.dll is required to generate Whisper bindings on Windows. Install the VC.Llvm.Clang component or set LIBCLANG_PATH.' }
+if (-not $libclang) { throw 'An x64 libclang.dll is required. Set LIBCLANG_PATH to its directory.' }
 $env:LIBCLANG_PATH = $libclang.DirectoryName
 $env:CARGO_NET_GIT_FETCH_WITH_CLI = 'true'
 # The bundled whisper-rs-sys bindings describe Linux FILE layouts; generate them for the MSVC target instead.
