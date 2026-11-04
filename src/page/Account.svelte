@@ -57,6 +57,7 @@
   }
 
   onDestroy(() => {
+    cancel_douyin_qr();
     if (unlisten_accounts) {
       unlisten_accounts();
       unlisten_accounts = null;
@@ -81,6 +82,8 @@
   let qr_image = "";
   let qr_url = "";
   let qr_error = "";
+  let qr_notice = "";
+  let qr_status_inflight = false;
   let webview_cookie_error = "";
   let webview_cookie_loading = false;
   let webview_cookie_polling = false;
@@ -128,8 +131,33 @@
     },
   };
 
+  // Douyin's QR login runs in a hidden app webview, which the web build doesn't have.
+  const uses_douyin_webview_qr = (platform: string) =>
+    TAURI_ENV && platform === "douyin";
+
   function default_tab(platform: string) {
-    return autoQrPlatforms.has(platform) ? "qr" : "manual";
+    return autoQrPlatforms.has(platform) || uses_douyin_webview_qr(platform)
+      ? "qr"
+      : "manual";
+  }
+
+  function cancel_douyin_qr() {
+    if (!oauth_key.startsWith("webview:")) {
+      return;
+    }
+    oauth_key = "";
+    if (check_interval) {
+      clearInterval(check_interval);
+    }
+    invoke("cancel_douyin_qr_login").catch((e) => console.log(e));
+  }
+
+  $: if (
+    !addModal ||
+    activeTab !== "qr" ||
+    !uses_douyin_webview_qr(selectedPlatform)
+  ) {
+    cancel_douyin_qr();
   }
 
   function set_platform(platform: string) {
@@ -202,17 +230,29 @@ function toggleDropdown(uid) {
     }
     tiktok_backoff = 0;
     qr_attempts = 0;
-    qr_max_attempts = selectedPlatform === "tiktok" ? 30 : 15;
-    min_qr_interval_ms = selectedPlatform === "tiktok" ? 60000 : selectedPlatform === "bilibili" ? 5000 : 3000;
+    const douyin_webview = uses_douyin_webview_qr(selectedPlatform);
+    qr_max_attempts = douyin_webview ? 150 : selectedPlatform === "tiktok" ? 30 : 15;
+    min_qr_interval_ms = douyin_webview ? 1500 : selectedPlatform === "tiktok" ? 60000 : selectedPlatform === "bilibili" ? 5000 : 3000;
     check_interval_ms = selectedPlatform === "tiktok" ? tiktok_interval_ms() : 2000;
     qr_error = "";
+    qr_notice = "";
     qr_image = "";
     qr_url = "";
+    oauth_key = "";
+    const requested_platform = selectedPlatform;
     try {
       let qr_info: { url?: string; image?: string; oauthKey: string } = await invoke(
         "get_qr",
-        { platform: selectedPlatform }
+        { platform: requested_platform }
       );
+      // The modal may have moved on while the login page was loading.
+      if (
+        uses_douyin_webview_qr(requested_platform) &&
+        (!addModal || activeTab !== "qr" || selectedPlatform !== requested_platform)
+      ) {
+        invoke("cancel_douyin_qr_login").catch((e) => console.log(e));
+        return;
+      }
       oauth_key = qr_info.oauthKey;
       qr_image = qr_info.image || "";
       qr_url = qr_info.url || "";
@@ -277,7 +317,12 @@ function toggleDropdown(uid) {
     if (!force && now - last_qr_check_ts < min_qr_interval_ms) {
       return;
     }
+    if (qr_status_inflight) {
+      return;
+    }
+    qr_status_inflight = true;
     last_qr_check_ts = now;
+    const polled_key = oauth_key;
     try {
       qr_attempts += 1;
       if (qr_attempts > qr_max_attempts) {
@@ -287,10 +332,27 @@ function toggleDropdown(uid) {
         qr_error = "已暂停轮询，请点击刷新二维码";
         return;
       }
-      let qr_status: { code: number; cookies: string; message?: string; extra?: string } = await invoke(
+      let qr_status: { code: number; cookies: string; message?: string; extra?: string; image?: string } = await invoke(
         "get_qr_status",
         { platform: selectedPlatform, qrcodeKey: oauth_key }
       );
+      if (polled_key !== oauth_key) {
+        return;
+      }
+      if (polled_key.startsWith("webview:") && qr_status.code != 0) {
+        if (qr_status.image) {
+          qr_image = qr_status.image;
+        }
+        if (qr_status.code == 2) {
+          clearInterval(check_interval);
+          qr_notice = "";
+          qr_error = qr_status.message || "二维码登录已终止";
+        } else {
+          qr_error = "";
+          qr_notice = qr_status.message === "new" ? "" : qr_status.message || "";
+        }
+        return;
+      }
       if (selectedPlatform === "kuaishou" && qr_status.cookies?.trim()) {
         const parts = oauth_key.split("|");
         if (parts.length >= 2) {
@@ -354,6 +416,8 @@ function toggleDropdown(uid) {
       }
     } catch (e) {
       qr_error = String(e || "二维码状态获取失败");
+    } finally {
+      qr_status_inflight = false;
     }
   }
 
@@ -833,6 +897,8 @@ function platform_avatar(platform: string) {
               </div>
               {#if qr_error}
                 <p class="text-sm text-center text-red-500">{qr_error}</p>
+              {:else if qr_notice}
+                <p class="text-sm text-center text-gray-600 dark:text-gray-400">{qr_notice}</p>
               {/if}
               <button
                 class="text-xs text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"

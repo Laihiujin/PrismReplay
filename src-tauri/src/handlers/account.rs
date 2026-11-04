@@ -451,7 +451,7 @@ fn fallback_uid_from_cookies(cookies: &str) -> String {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct CookieItem {
+pub(super) struct CookieItem {
     name: String,
     value: String,
 }
@@ -611,7 +611,7 @@ fn append_kuaishou_user_id_from_extra(cookies: &str, extra: Option<&String>) -> 
     format!("{cookies}; userId={uid}")
 }
 
-async fn build_webview_cookie_result(
+pub(super) async fn build_webview_cookie_result(
     platform: &str,
     cookie_str: String,
     cookie_list: Vec<CookieItem>,
@@ -1685,7 +1685,28 @@ pub async fn get_douyin_webview_cookies(
         .app_handle
         .get_webview_window(label)
         .ok_or_else(|| "未找到内置浏览器窗口，请先打开登录窗口".to_string())?;
+    let (cookie_str, cookie_list, has_login) = collect_douyin_webview_cookies(&window)?;
+
+    if cookie_str.is_empty() {
+        return Err("未读取到 Cookie，请先在内置浏览器完成登录".to_string());
+    }
+
+    if !has_login {
+        log::warn!("[Account] Douyin webview cookies missing core login tokens (sessionid).");
+        return Err("未检测到抖音登录状态。请在内置浏览器完成登录后再导入。".to_string());
+    }
+
+    return build_webview_cookie_result("douyin", cookie_str, cookie_list).await;
+}
+
+/// Reads every Douyin cookie from a webview: the cookie header, its parsed form, and whether it
+/// holds a logged-in session.
+#[cfg(feature = "gui")]
+pub(super) fn collect_douyin_webview_cookies(
+    window: &tauri::WebviewWindow,
+) -> Result<(String, Vec<CookieItem>, bool), String> {
     let urls = [
+        "https://creator.douyin.com",
         "https://douyin.com",
         "https://www.douyin.com",
         "https://m.douyin.com",
@@ -1758,20 +1779,11 @@ pub async fn get_douyin_webview_cookies(
         })
         .collect::<Vec<_>>();
 
-    if cookie_str.is_empty() {
-        return Err("未读取到 Cookie，请先在内置浏览器完成登录".to_string());
-    }
-
     let has_login = cookie_map.contains_key("sessionid")
         || cookie_map.contains_key("sessionid_ss")
         || cookie_map_lower.contains_key("sessionid")
         || cookie_map_lower.contains_key("sessionid_ss");
-    if !has_login {
-        log::warn!("[Account] Douyin webview cookies missing core login tokens (sessionid).");
-        return Err("未检测到抖音登录状态。请在内置浏览器完成登录后再导入。".to_string());
-    }
-
-    return build_webview_cookie_result("douyin", cookie_str, cookie_list).await;
+    Ok((cookie_str, cookie_list, has_login))
 }
 
 #[cfg(feature = "gui")]
@@ -3257,10 +3269,16 @@ pub async fn refresh_guest_accounts_force(state: state_type!()) -> Result<(), St
 
 #[cfg_attr(feature = "gui", tauri::command)]
 pub async fn get_qr_status(
-    _state: state_type!(),
+    state: state_type!(),
     platform: String,
     qrcode_key: &str,
 ) -> Result<PlatformQrStatus, String> {
+    #[cfg(feature = "gui")]
+    if platform == "douyin" && qrcode_key.starts_with(super::douyin_qr::KEY_PREFIX) {
+        return super::douyin_qr::poll(&state.app_handle, qrcode_key).await;
+    }
+    #[cfg(not(feature = "gui"))]
+    let _ = &state;
     log::warn!(
         "[Account] get_qr_status platform={}, key_len={}",
         platform,
@@ -3280,6 +3298,7 @@ pub async fn get_qr_status(
                     cookies: qr_status.cookies,
                     message: None,
                     extra: None,
+                    image: None,
                 })
             }
             Err(e) => Err(e.to_string()),
@@ -3297,6 +3316,7 @@ pub async fn get_qr_status(
                     cookies: qr_status.cookies,
                     message: Some(qr_status.message),
                     extra: None,
+                    image: None,
                 })
             }
             Err(e) => Err(e.to_string()),
@@ -3345,6 +3365,7 @@ pub async fn get_qr_status(
                         cookies,
                         message: qr_status.message,
                         extra,
+                        image: None,
                     })
                 }
                 Err(e) => Err(e.to_string()),
@@ -3363,6 +3384,7 @@ pub async fn get_qr_status(
                     cookies: qr_status.cookies,
                     message: Some(qr_status.message),
                     extra: None,
+                    image: None,
                 })
             }
             Err(e) => Err(e.to_string()),
@@ -3614,7 +3636,13 @@ pub async fn check_tiktok_cookie(
 }
 
 #[cfg_attr(feature = "gui", tauri::command)]
-pub async fn get_qr(_state: state_type!(), platform: String) -> Result<PlatformQrInfo, String> {
+pub async fn get_qr(state: state_type!(), platform: String) -> Result<PlatformQrInfo, String> {
+    #[cfg(feature = "gui")]
+    if platform == "douyin" {
+        return super::douyin_qr::start(&state.app_handle).await;
+    }
+    #[cfg(not(feature = "gui"))]
+    let _ = &state;
     log::warn!("[Account] get_qr platform={}", platform);
     let client = crate::utils::http::no_proxy_client();
     match platform.as_str() {
@@ -3727,6 +3755,16 @@ pub struct PlatformQrStatus {
     pub cookies: String,
     pub message: Option<String>,
     pub extra: Option<String>,
+    /// Replaces the code on screen when the platform rotated it during polling.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+}
+
+#[cfg(feature = "gui")]
+#[tauri::command]
+pub async fn cancel_douyin_qr_login(state: state_type!()) -> Result<(), String> {
+    super::douyin_qr::cancel(&state.app_handle).await;
+    Ok(())
 }
 
 #[cfg(test)]

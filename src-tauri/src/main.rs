@@ -798,6 +798,7 @@ fn setup_invoke_handlers(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         crate::handlers::account::get_account_count,
         crate::handlers::account::get_qr_status,
         crate::handlers::account::get_qr,
+        crate::handlers::account::cancel_douyin_qr_login,
         crate::handlers::account::check_tiktok_proxy,
         crate::handlers::account::check_tiktok_cookie,
         crate::handlers::account::list_webview_windows,
