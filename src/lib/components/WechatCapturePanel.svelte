@@ -34,6 +34,7 @@
   interface Monitor {
     running: boolean;
     host: string;
+    account_id: string;
     interval_mins: number;
     message: string;
     last_check_ms: number;
@@ -43,6 +44,7 @@
   }
   let monitor: Monitor | null = null;
   let monitorHost = "";
+  let monitorAccountId = "";
   let monitorMinutes = 5;
   let monitorAutoRecord = false;
   let monitorTimer: ReturnType<typeof setInterval> | null = null;
@@ -51,15 +53,26 @@
     try {
       monitor = (await invoke("wechat_monitor_status")) as Monitor;
       if (monitor.host && !monitorHost) monitorHost = monitor.host;
+      if (monitor.account_id && !monitorAccountId && monitor.host === monitorHost) monitorAccountId = monitor.account_id;
     } catch (e) {
       monitor = null;
     }
   }
 
+  async function bindMonitorProfile() {
+    error = "";
+    try {
+      const target = await invoke("wechat_monitor_bind", { host: monitorHost }) as { host: string; account_id: string };
+      monitorHost = target.host;
+      monitorAccountId = target.account_id;
+    } catch (e) { error = String(e); }
+    await refreshMonitor();
+  }
+
   async function startMonitor() {
     error = "";
     try {
-      await invoke("wechat_monitor_start", { host: monitorHost, intervalMins: Number(monitorMinutes), autoRecord: monitorAutoRecord });
+      await invoke("wechat_monitor_start", { host: monitorHost, accountId: monitorAccountId, intervalMins: Number(monitorMinutes), autoRecord: monitorAutoRecord });
     } catch (e) {
       error = String(e);
     }
@@ -246,25 +259,27 @@
       <div class="border-t border-gray-200 dark:border-gray-700 pt-2 space-y-1.5 text-xs">
         <div class="font-medium text-gray-900 dark:text-white">跟踪指定视频号</div>
         <p>
-          在电脑版微信搜索目标账号的完整显示名，例如“陈赫”而不是“陈赫工作室”。保留搜索标签，监控会尝试自动选中它；可能短暂切换微信标签。默认只检查状态，不抓包、不改系统代理、不安装证书。页面读不到或同名结果不明确时显示“无法确认”，不会当作未开播。
+          先在电脑版微信打开本人视频号主页（不是搜索结果），填写显示名并点“绑定当前主页”。绑定后按主页账号 ID 检查状态，同名账号不会替代它。默认只监控，不抓包、不改系统代理；微信需保持主页可读，读取失败时显示“无法确认”。
         </p>
         <div class="flex items-center gap-2">
           <input class="min-w-0 flex-1 rounded bg-white dark:bg-[#2c2c2e] px-2 py-1 text-gray-900 dark:text-white"
-            placeholder="目标完整显示名，如 陈赫" bind:value={monitorHost} disabled={monitor?.running} />
+            placeholder="本人主页显示名，如 陈赫" bind:value={monitorHost} on:input={() => monitorAccountId = ""} disabled={monitor?.running} />
+          <button class="shrink-0 px-2 py-1 rounded-md bg-gray-200 dark:bg-gray-700 disabled:opacity-50" disabled={monitor?.running || !monitorHost.trim()} on:click={bindMonitorProfile}>绑定当前主页</button>
           <input class="w-14 rounded bg-white dark:bg-[#2c2c2e] px-2 py-1 text-gray-900 dark:text-white"
             type="number" min="5" title="检查间隔（分钟），最少 5 分钟" bind:value={monitorMinutes} disabled={monitor?.running} />
           <span>分钟</span>
           {#if monitor?.running}
             <button class="shrink-0 px-3 py-1 rounded-md text-gray-600 dark:text-gray-400 hover:underline" on:click={stopMonitor}>停止监控</button>
           {:else}
-            <button class="shrink-0 px-3 py-1 rounded-md bg-blue-600 text-white disabled:opacity-50" disabled={!monitorHost.trim()} on:click={startMonitor}>开始监控</button>
+            <button class="shrink-0 px-3 py-1 rounded-md bg-blue-600 text-white disabled:opacity-50" disabled={!monitorHost.trim() || !monitorAccountId} on:click={startMonitor}>开始监控</button>
           {/if}
         </div>
         <label class="flex items-center gap-2">
           <input type="checkbox" bind:checked={monitorAutoRecord} disabled={monitor?.running || !status.ca_installed} />
           开播后自动抓流录制（可选，需您先安装抓取证书）
         </label>
-        <p class="text-gray-500 dark:text-gray-400">仅按完整显示名匹配，不是永久账号 ID；同名账号需人工核对。检查间隔至少 5 分钟，软件和微信需保持运行。</p>
+        <p class="text-gray-500 dark:text-gray-400">每次读取都核对已绑定的 @finder 账号标识，显示名只作为导航提示。不会保存主页里的登录票据或完整带签名地址。检查至少间隔 5 分钟。</p>
+        {#if monitorAccountId}<p class="text-gray-500 dark:text-gray-400 break-all">已绑定账号：{monitorAccountId.slice(0, 12)}…{monitorAccountId.slice(-12)}</p>{/if}
         {#if monitor?.message}
           <p class="text-gray-500 dark:text-gray-400">
             {monitor.host}：{monitor.message}{monitor.last_check_ms ? `（${new Date(monitor.last_check_ms).toLocaleTimeString()}）` : ""}

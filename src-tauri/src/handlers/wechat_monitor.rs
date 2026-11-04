@@ -70,8 +70,49 @@ fn parse_page_output(output: &str, host: &str) -> PageState {
     result.unwrap_or(PageState::Unknown)
 }
 
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct MonitorTarget {
+    pub host: String,
+    pub account_id: String,
+}
+
+fn valid_account_id(value: &str) -> bool {
+    value.len() <= 256
+        && value.strip_suffix("@finder").is_some_and(|prefix| {
+            !prefix.is_empty()
+                && prefix
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+        })
+}
+
+fn parse_target_output(output: &str, expected_host: &str) -> Result<MonitorTarget, String> {
+    let lines: Vec<_> = output.lines().filter(|s| !s.trim().is_empty()).collect();
+    if lines.len() != 1 {
+        return Err("无法确认唯一账号，请只打开一个目标主页".into());
+    }
+    let parts: Vec<_> = lines[0].trim().splitn(3, '\t').collect();
+    if parts.len() != 3
+        || parts[0] != "PROFILE"
+        || !valid_account_id(parts[1])
+        || parts[2] != expected_host
+    {
+        return Err("请在微信打开目标本人的视频号主页，确认完整显示名一致后再绑定".into());
+    }
+    Ok(MonitorTarget {
+        host: parts[2].into(),
+        account_id: parts[1].into(),
+    })
+}
+
 #[cfg(windows)]
-async fn read_search_page(host: &str, refresh: bool, enter: bool) -> Result<PageState, String> {
+async fn run_page_reader(
+    host: &str,
+    account_id: &str,
+    refresh: bool,
+    enter: bool,
+    bind: bool,
+) -> Result<String, String> {
     let mut command = tokio::process::Command::new("powershell.exe");
     command
         .args([
@@ -81,6 +122,8 @@ async fn read_search_page(host: &str, refresh: bool, enter: bool) -> Result<Page
             SEARCH_PAGE_SCRIPT,
         ])
         .env("WECHAT_MONITOR_KEYWORD", host)
+        .env("WECHAT_MONITOR_ACCOUNT_ID", account_id)
+        .env("WECHAT_MONITOR_BIND", if bind { "1" } else { "0" })
         .env("WECHAT_MONITOR_REFRESH", if refresh { "1" } else { "0" })
         .env("WECHAT_MONITOR_ENTER", if enter { "1" } else { "0" })
         .creation_flags(0x0800_0000)
@@ -88,19 +131,32 @@ async fn read_search_page(host: &str, refresh: bool, enter: bool) -> Result<Page
     let output = tokio::time::timeout(Duration::from_secs(20), command.output())
         .await
         .map_err(|_| "读取微信页面超时，当前状态无法确认".to_string())?
-        .map_err(|e| format!("无法读取微信页面：{e}"))?;
+        .map_err(|_| "无法启动微信页面读取，当前状态无法确认".to_string())?;
     if !output.status.success() {
         return Err("无法读取电脑版微信，当前状态无法确认".into());
     }
-    Ok(parse_page_output(
-        &String::from_utf8_lossy(&output.stdout),
-        host,
-    ))
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 #[cfg(not(windows))]
-async fn read_search_page(_host: &str, _refresh: bool, _enter: bool) -> Result<PageState, String> {
+async fn run_page_reader(
+    _host: &str,
+    _account_id: &str,
+    _refresh: bool,
+    _enter: bool,
+    _bind: bool,
+) -> Result<String, String> {
     Err("只支持 Windows".into())
+}
+
+async fn read_search_page(
+    host: &str,
+    account_id: &str,
+    refresh: bool,
+    enter: bool,
+) -> Result<PageState, String> {
+    let output = run_page_reader(host, account_id, refresh, enter, false).await?;
+    Ok(parse_page_output(&output, account_id))
 }
 
 fn quality(candidate: &StreamCandidate) -> u32 {
@@ -131,6 +187,7 @@ async fn wait_for_stream(capture: &WechatCapture) -> Option<StreamCandidate> {
 pub struct MonitorStatus {
     pub running: bool,
     pub host: String,
+    pub account_id: String,
     pub interval_mins: u64,
     pub message: String,
     pub last_check_ms: i64,
@@ -163,10 +220,11 @@ async fn record_live_room(
     app: &AppHandle,
     capture: &Arc<WechatCapture>,
     host: &str,
+    account_id: &str,
     title: Option<String>,
 ) -> Result<String, String> {
     capture.start().await?;
-    let entered = read_search_page(host, false, true).await;
+    let entered = read_search_page(host, account_id, false, true).await;
     let stream = match entered {
         Ok(PageState::Live { .. }) => wait_for_stream(capture).await,
         _ => None,
@@ -209,40 +267,43 @@ async fn monitor_loop(
     app: AppHandle,
     monitor: Arc<WechatMonitor>,
     host: String,
+    account_id: String,
     interval: u64,
     auto_record: bool,
 ) {
     let capture = app.state::<Arc<WechatCapture>>().inner().clone();
     loop {
-        let page = read_search_page(&host, true, false).await;
+        let page = read_search_page(&host, &account_id, true, false).await;
         match page {
             Ok(PageState::NoPage) => monitor.say_state(
                 "unknown",
-                format!("无法确认：请打开“{host} - 搜一搜”标签；监控会尝试自动选中它"),
+                format!("无法确认：请保持“{host}”本人主页打开；不会改为跟踪其他账号"),
             ),
             Ok(PageState::Unknown) => {
                 monitor.say_state("unknown", "无法确认：页面未完成读取或刷新，请检查微信窗口")
             }
             Ok(PageState::AccountNotFound) => {
-                monitor.say_state("unknown", "无法确认：搜索结果里没有完整名称匹配的目标账号")
+                monitor.say_state("unknown", "无法确认：当前页面不是已绑定的账号主页")
             }
             Ok(PageState::Ambiguous) => monitor.say_state(
                 "unknown",
                 "无法确认：存在多个同名结果，请在微信中核对目标账号",
             ),
             Ok(PageState::Offline) => {
-                monitor.say_state("offline", "已找到完整名称匹配的账号，未检测到开播标记")
+                monitor.say_state("offline", "已核对绑定的账号 ID，当前主页未检测到开播标记")
             }
             Ok(PageState::Live { title }) => {
                 monitor.say_state("live", "已检测到目标账号直播中");
                 if auto_record {
                     monitor.say_state("live", "已开播，正在进入目标直播间并抓取…");
-                    match record_live_room(&app, &capture, &host, title).await {
+                    match record_live_room(&app, &capture, &host, &account_id, title).await {
                         Ok(room_id) => {
                             monitor.say_state("recording", "正在录制目标直播间");
                             wait_until_recording_ends(&app, &room_id).await;
-                            monitor
-                                .say_state("unknown", "录制结束，将重新选择目标搜索标签继续监控");
+                            monitor.say_state(
+                                "unknown",
+                                "录制结束，请返回已绑定的账号主页以继续状态检查",
+                            );
                         }
                         Err(error) => {
                             monitor.say_state("live", format!("已检测到开播，但没有录上：{error}"))
@@ -264,16 +325,51 @@ pub async fn wechat_monitor_status(monitor: MonitorState<'_>) -> Result<MonitorS
 }
 
 #[tauri::command]
+pub async fn wechat_monitor_bind(
+    monitor: MonitorState<'_>,
+    host: String,
+) -> Result<MonitorTarget, String> {
+    let host = host.trim();
+    if host.is_empty() || host.chars().count() > 80 || host.chars().any(char::is_control) {
+        return Err("请填写目标账号完整显示名".into());
+    }
+    if monitor.status.lock().unwrap().running {
+        return Err("请先停止监控再更换绑定账号".into());
+    }
+    let output = run_page_reader(host, "", false, false, true).await?;
+    let target = parse_target_output(&output, host)?;
+    let mut status = monitor.status.lock().unwrap();
+    if status.running {
+        return Err("监控已经启动，请先停止".into());
+    }
+    status.host = target.host.clone();
+    status.account_id = target.account_id.clone();
+    status.live_state = "unknown".into();
+    status.message = "已绑定本人主页账号 ID，尚未开始监控".into();
+    Ok(target)
+}
+
+#[tauri::command]
 pub async fn wechat_monitor_start(
     app: AppHandle,
     monitor: MonitorState<'_>,
     host: String,
+    account_id: Option<String>,
     interval_mins: u64,
     auto_record: Option<bool>,
 ) -> Result<(), String> {
     let host = host.trim().to_string();
     if host.is_empty() || host.chars().count() > 80 || host.chars().any(char::is_control) {
         return Err("请填写目标账号的完整显示名（1–80 字，不含控制字符）".into());
+    }
+    let account_id = account_id
+        .filter(|value| valid_account_id(value))
+        .ok_or_else(|| "请先绑定微信当前打开的本人主页".to_string())?;
+    {
+        let bound = monitor.status.lock().unwrap();
+        if bound.account_id != account_id || bound.host != host {
+            return Err("账号或名字已变化，请重新绑定本人主页".into());
+        }
     }
     let auto_record = auto_record.unwrap_or(false);
     if auto_record {
@@ -294,6 +390,7 @@ pub async fn wechat_monitor_start(
     *monitor.status.lock().unwrap() = MonitorStatus {
         running: true,
         host: host.clone(),
+        account_id: account_id.clone(),
         interval_mins: interval,
         message: "正在检查…".into(),
         last_check_ms: 0,
@@ -305,6 +402,7 @@ pub async fn wechat_monitor_start(
         app,
         monitor.clone(),
         host,
+        account_id,
         interval,
         auto_record,
     ));
@@ -341,7 +439,7 @@ mod tests {
     #[test]
     fn exact_target_live() {
         assert_eq!(
-            parse_page_output("LIVE\t陈赫\t测试直播", "陈赫"),
+            parse_page_output("LIVE\tperson@finder\t测试直播", "person@finder"),
             PageState::Live {
                 title: Some("测试直播".into())
             }
@@ -350,11 +448,11 @@ mod tests {
     #[test]
     fn another_account_cannot_report_target_live() {
         assert_eq!(
-            parse_page_output("LIVE\t陈赫工作室\t测试直播", "陈赫"),
+            parse_page_output("LIVE\tstudio@finder\t测试直播", "person@finder"),
             PageState::Unknown
         );
         assert_eq!(
-            parse_page_output("OFFLINE\t陈赫工作室", "陈赫"),
+            parse_page_output("OFFLINE\tstudio@finder", "person@finder"),
             PageState::Unknown
         );
     }
@@ -369,7 +467,7 @@ mod tests {
     #[test]
     fn account_must_be_observed_before_offline() {
         assert_eq!(
-            parse_page_output("OFFLINE\t陈赫", "陈赫"),
+            parse_page_output("OFFLINE\tperson@finder", "person@finder"),
             PageState::Offline
         );
     }
@@ -387,7 +485,10 @@ mod tests {
     #[test]
     fn duplicate_records_are_ambiguous() {
         assert_eq!(
-            parse_page_output("LIVE\t陈赫\t一\nLIVE\t陈赫\t二", "陈赫"),
+            parse_page_output(
+                "LIVE\tperson@finder\t一\nLIVE\tperson@finder\t二",
+                "person@finder"
+            ),
             PageState::Ambiguous
         );
     }
@@ -401,5 +502,19 @@ mod tests {
     #[test]
     fn unknown_protocol_is_not_offline() {
         assert_eq!(parse_page_output("loading...", "陈赫"), PageState::Unknown);
+    }
+    #[test]
+    fn binds_only_the_confirmed_profile_identity() {
+        let target = parse_target_output("PROFILE\tperson@finder\t陈赫", "陈赫").unwrap();
+        assert_eq!(target.account_id, "person@finder");
+        assert!(parse_target_output("PROFILE\tstudio@finder\t陈赫工作室", "陈赫").is_err());
+    }
+    #[test]
+    fn rejects_session_urls_instead_of_saving_them() {
+        assert!(!valid_account_id(
+            "https://channels.weixin.qq.com/web/pages/profile?exportkey=secret"
+        ));
+        assert!(!valid_account_id("person@finder\tsecret"));
+        assert!(valid_account_id("v2_060000test@finder"));
     }
 }
