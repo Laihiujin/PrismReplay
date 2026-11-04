@@ -1,5 +1,7 @@
 pub mod account;
 pub mod config;
+#[cfg(feature = "gui")]
+pub mod douyin_qr;
 pub mod macros;
 pub mod message;
 pub mod recorder;
