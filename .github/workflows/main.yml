@@ -7,6 +7,7 @@ on:
 
 jobs:
   build-artifacts:
+    if: false
     strategy:
       fail-fast: false
       matrix:
