@@ -671,6 +671,8 @@ pub async fn generate_video_subtitle(
             if whisper_model.is_empty() {
                 return Err("Whisper model not configured".to_string());
             }
+            #[cfg(all(target_os = "windows", feature = "cuda"))]
+            crate::subtitle_generator::cuda_runtime::ensure_loaded(reporter).await?;
             if let Ok(generator) = whisper_cpp::new(Path::new(&whisper_model), whisper_prompt).await
             {
                 let chunk_dir = extract_audio_chunks(file, "wav").await?;

@@ -20,9 +20,7 @@
     "resources": [
       "ffmpeg.exe",
       "ffprobe.exe",
-      "cudart64*.dll",
-      "cublas64*.dll",
-      "cublasLt64*.dll"
+      "cudart64*.dll"
     ]
   }
 }

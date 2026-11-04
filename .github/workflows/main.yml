@@ -169,6 +169,30 @@ jobs:
           REQUIRE_CUDA_BUILD: "1"
         run: .\build.ps1
 
+      - name: Check the CUDA build starts without cublas
+        shell: powershell
+        run: |
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $dumpbin = Get-ChildItem "$vsPath\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe |
+            Where-Object { $_.FullName -match 'Hostx64\\x64' } |
+            Select-Object -First 1
+          $dependents = (& $dumpbin.FullName /dependents src-tauri/target/release/LIVE.exe) -join "`n"
+          Write-Host $dependents
+          $delayed = ($dependents -split 'delay load dependencies')[1]
+          if (-not $delayed -or $delayed -notmatch 'cublas64_12\.dll' -or $delayed -notmatch 'cublasLt64_12\.dll') {
+            throw 'cublas is not delay-loaded.'
+          }
+
+          if (Test-Path src-tauri/target/release/cublas64_12.dll) {
+            throw 'cublas was copied next to the binary, so this check would prove nothing.'
+          }
+          $app = Start-Process src-tauri/target/release/LIVE.exe -PassThru
+          Start-Sleep -Seconds 20
+          if ($app.HasExited) {
+            throw "LIVE.exe exited during startup with code $($app.ExitCode)."
+          }
+          Stop-Process -Id $app.Id -Force
+
       - name: Report package sizes
         shell: powershell
         run: |
