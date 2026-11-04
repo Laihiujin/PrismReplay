@@ -26,7 +26,13 @@ use std::{
 use tokio::{net::TcpListener, sync::oneshot, sync::Mutex, task::JoinHandle};
 
 /// Domains the CA may sign for and the proxy may decrypt. Keep in sync with `source::WechatSource`.
-pub const MITM_SUFFIXES: &[&str] = &["qq.com", "myqcloud.com", "qcloud.com", "qcloudcdn.com"];
+pub const MITM_SUFFIXES: &[&str] = &[
+    "qq.com",
+    "myqcloud.com",
+    "qcloud.com",
+    "qcloudcdn.com",
+    "wxlivecdn.com",
+];
 const CA_COMMON_NAME: &str = "PrismReplay Local Capture CA";
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MAX_CANDIDATES: usize = 20;
@@ -196,6 +202,12 @@ struct LocalCa {
 struct CaMeta {
     serial_hex: String,
     not_after_ms: i64,
+    /// Domains the certificate may sign for. A certificate that lacks one must be replaced.
+    #[serde(default)]
+    suffixes: Vec<String>,
+    /// Replaced certificates, removed from the trust store when the new one is installed.
+    #[serde(default)]
+    retired_serials: Vec<String>,
 }
 
 fn generate_ca(suffixes: &[String]) -> Result<(LocalCa, i64), String> {
@@ -242,16 +254,21 @@ fn generate_ca(suffixes: &[String]) -> Result<(LocalCa, i64), String> {
 fn load_or_create_ca(dir: &Path, suffixes: &[String]) -> Result<LocalCa, String> {
     let (cert_path, key_path, meta_path) =
         (dir.join("ca.crt"), dir.join("ca.key"), dir.join("ca.json"));
+    let previous: Option<CaMeta> = std::fs::read_to_string(&meta_path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok());
     let existing = (|| {
-        let meta: CaMeta = serde_json::from_str(&std::fs::read_to_string(&meta_path).ok()?).ok()?;
+        let meta = previous.as_ref()?;
         let week_ms = 7 * 24 * 3600 * 1000;
-        if meta.not_after_ms < chrono::Utc::now().timestamp_millis() + week_ms {
+        if meta.not_after_ms < chrono::Utc::now().timestamp_millis() + week_ms
+            || meta.suffixes != suffixes
+        {
             return None;
         }
         Some(LocalCa {
             cert_pem: std::fs::read_to_string(&cert_path).ok()?,
             key_pem: std::fs::read_to_string(&key_path).ok()?,
-            serial_hex: meta.serial_hex,
+            serial_hex: meta.serial_hex.clone(),
         })
     })();
     if let Some(ca) = existing {
@@ -262,9 +279,16 @@ fn load_or_create_ca(dir: &Path, suffixes: &[String]) -> Result<LocalCa, String>
     let write_err = |e: std::io::Error| format!("无法保存证书：{e}");
     std::fs::write(&key_path, &ca.key_pem).map_err(write_err)?;
     std::fs::write(&cert_path, &ca.cert_pem).map_err(write_err)?;
+    let mut retired_serials = Vec::new();
+    if let Some(previous) = previous {
+        retired_serials = previous.retired_serials;
+        retired_serials.push(previous.serial_hex);
+    }
     let meta = CaMeta {
         serial_hex: ca.serial_hex.clone(),
         not_after_ms,
+        suffixes: suffixes.to_vec(),
+        retired_serials,
     };
     std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap()).map_err(write_err)?;
     Ok(ca)
@@ -468,11 +492,13 @@ impl WechatCapture {
         // Starting requires the certificate, so the store is only queried while idle.
         let capturing = self.running.lock().await.is_some();
         let dir = self.dir.clone();
+        let suffixes = self.shared.suffixes.clone();
         let ca_installed = capturing
             || tokio::task::spawn_blocking(move || {
                 let meta = std::fs::read_to_string(dir.join("ca.json")).ok()?;
                 let meta: CaMeta = serde_json::from_str(&meta).ok()?;
-                Some(trust_store_contains(&meta.serial_hex))
+                let current = meta.suffixes == suffixes;
+                Some(current && trust_store_contains(&meta.serial_hex))
             })
             .await
             .map_err(|e| e.to_string())?
@@ -506,9 +532,40 @@ impl WechatCapture {
         .await
         .map_err(|e| e.to_string())??;
         if output.status.success() {
+            self.remove_retired_certificates().await;
             Ok(())
         } else {
             Err("证书没有安装。如果你在 Windows 的提示里选了“否”，可以重新点安装。".into())
+        }
+    }
+
+    /// Replaced certificates must not stay trusted. A refusal is retried on the next install.
+    #[cfg(windows)]
+    async fn remove_retired_certificates(&self) {
+        let meta_path = self.dir.join("ca.json");
+        let Some(mut meta) = std::fs::read_to_string(&meta_path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<CaMeta>(&text).ok())
+        else {
+            return;
+        };
+        let retired = std::mem::take(&mut meta.retired_serials);
+        for serial in retired {
+            let target = serial.clone();
+            let keep = tokio::task::spawn_blocking(move || {
+                trust_store_contains(&target)
+                    && !certutil(&["-user", "-delstore", "Root", &target])
+                        .map(|output| output.status.success())
+                        .unwrap_or(false)
+            })
+            .await
+            .unwrap_or(true);
+            if keep {
+                meta.retired_serials.push(serial);
+            }
+        }
+        if let Ok(text) = serde_json::to_string(&meta) {
+            let _ = std::fs::write(&meta_path, text);
         }
     }
 
@@ -516,6 +573,7 @@ impl WechatCapture {
     pub async fn remove_ca(&self) -> Result<(), String> {
         self.stop().await?;
         let serial = self.ca()?.serial_hex;
+        self.remove_retired_certificates().await;
         let output = tokio::task::spawn_blocking(move || {
             certutil(&["-user", "-delstore", "Root", &serial])
         })
@@ -664,7 +722,13 @@ mod tests {
     #[test]
     fn only_tencent_domains_are_decrypted() {
         let suffixes: Vec<String> = MITM_SUFFIXES.iter().map(|s| s.to_string()).collect();
-        for host in ["finder.video.qq.com", "qq.com", "A.MYQCLOUD.COM", "x.qcloudcdn.com."] {
+        for host in [
+            "finder.video.qq.com",
+            "qq.com",
+            "A.MYQCLOUD.COM",
+            "x.qcloudcdn.com.",
+            "pull.wxlivecdn.com",
+        ] {
             assert!(host_matches(host, &suffixes), "{host}");
         }
         for host in ["qq.com.evil.test", "notqq.com", "bank.example.com", "weixin.com"] {
@@ -750,6 +814,19 @@ mod tests {
             assert!(der.windows(suffix.len()).any(|w| w == suffix.as_bytes()), "{suffix}");
         }
         authority(&first).unwrap();
+    }
+
+    #[test]
+    fn ca_lacking_a_domain_is_replaced_and_the_old_one_retired() {
+        let dir = temp_dir();
+        let old = load_or_create_ca(&dir, &["qq.com".to_string()]).unwrap();
+        let new = load_or_create_ca(&dir, &["qq.com".to_string(), "wxlivecdn.com".to_string()])
+            .unwrap();
+        assert_ne!(old.serial_hex, new.serial_hex);
+        let meta: CaMeta =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("ca.json")).unwrap()).unwrap();
+        assert_eq!(meta.retired_serials, vec![old.serial_hex]);
+        assert_eq!(meta.serial_hex, new.serial_hex);
     }
 
     /// `certutil -dump` is read-only and prints serials in the format the trust-store check expects.

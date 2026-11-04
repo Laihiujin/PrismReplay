@@ -77,14 +77,17 @@ impl WechatSource {
             return Err("只接受不含用户凭据及片段的 HTTP(S) 媒体直链".into());
         }
         let host = url.host_str().unwrap_or("");
-        if !["qq.com", "myqcloud.com", "qcloud.com", "qcloudcdn.com"]
+        if !["qq.com", "myqcloud.com", "qcloud.com", "qcloudcdn.com", "wxlivecdn.com"]
             .iter()
             .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
         {
-            return Err("请使用参考工具捕获的腾讯/微信 CDN 媒体直链，而非分享页或其他站点".into());
+            return Err(format!("暂不支持域名 {host}：请使用腾讯/微信 CDN 媒体直链，而非分享页或其他站点"));
         }
         let path = url.path().to_ascii_lowercase();
+        // wxlivecdn.com only serves live streams, whatever the path looks like.
+        let live_cdn = host == "wxlivecdn.com" || host.ends_with(".wxlivecdn.com");
         if !captured_stream
+            && !live_cdn
             && !(path.ends_with(".m3u8")
                 || path.ends_with(".flv")
                 || path.ends_with(".mp4")
@@ -159,6 +162,13 @@ mod tests {
         assert!(WechatSource::parse(r#"{"url":"https://evil.test/stream","captured_stream":true}"#).is_err());
         // Without the capture flag an extensionless URL is still rejected.
         assert!(WechatSource::parse("https://live.video.qq.com/stream?sig=1").is_err());
+    }
+
+    #[test]
+    fn live_cdn_is_accepted_with_any_path() {
+        let source = WechatSource::parse("https://a.wxlivecdn.com/trtc_1/stream?sign=1").unwrap();
+        assert_eq!(source.url, "https://a.wxlivecdn.com/trtc_1/stream?sign=1");
+        assert!(WechatSource::parse("https://wxlivecdn.com.evil.test/a.flv").is_err());
     }
 
     #[test]
