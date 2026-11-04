@@ -846,6 +846,7 @@ fn setup_invoke_handlers(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         crate::handlers::wechat_capture::wechat_capture_stop,
         crate::handlers::wechat_capture::wechat_capture_preview,
         crate::handlers::wechat_monitor::wechat_monitor_status,
+        crate::handlers::wechat_monitor::wechat_monitor_bind,
         crate::handlers::wechat_monitor::wechat_monitor_start,
         crate::handlers::wechat_monitor::wechat_monitor_stop,
         crate::handlers::recorder::remove_recorder,

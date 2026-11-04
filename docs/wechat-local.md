@@ -74,3 +74,11 @@ cargo test --locked -p recorder captures_local_media_and_stops_without_retrying 
 
 - [qiye45/wechatVideoDownload](https://github.com/qiye45/wechatVideoDownload)：公开仓库主要提供使用说明与示例，用于确认复制媒体链接的交互，不把它当作可直接合并的源码。
 - [putyy/res-downloader](https://github.com/putyy/res-downloader)：参考资源字段格式（`core/shared/base.go` 与 `core/plugins/plugin.qq.com.go`）。本适配器为独立实现，没有复制其代理或脚本注入实现。
+
+## 指定账号状态监控修订
+
+- 默认仅监控状态，不自动抓流、不设置系统代理，亦不要求安装抓取证书。需要录制时自行勾选选项，并确认安装证书。
+- 填写完整显示名，例如“陈赫”不会匹配“陈赫工作室”。这仍是显示名匹配，不是微信永久账号 ID；多个同名结果会显示无法确认，需要人工核对。
+- 搜索标签被切走时，会尝试通过辅助功能选中已有目标标签，可能短暂改变微信活动标签。微信需保持运行，检查至少间隔 5 分钟。
+- 空输出、刷新失败、找不到账号、页面读取超时均显示无法确认，不当作未开播。未开播状态准确含义是已找到目标显示名但没有观察到开播标记，并非平台服务端权威状态。
+- 页面读取有 20 秒上限；停止监控取消页面读取，不继续运行悬挂的辅助进程。软件退出后仍需重新开始监控，尚未验证真实微信界面的最新布局。
