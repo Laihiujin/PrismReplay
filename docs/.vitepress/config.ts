@@ -3,6 +3,7 @@ import { withMermaid } from "vitepress-plugin-mermaid";
 
 // https://vitepress.dev/reference/site-config
 export default withMermaid({
+  base: "/PrismReplay/",
   title: "BiliBili ShadowReplay",
   description: "直播录制/实时回放/剪辑/投稿工具",
   themeConfig: {
