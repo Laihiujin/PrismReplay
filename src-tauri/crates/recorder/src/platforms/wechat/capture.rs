@@ -755,6 +755,9 @@ pub fn recover_after_crash(_dir: &Path) {}
 
 // --- service -----------------------------------------------------------------------------------
 
+#[cfg(not(windows))]
+const WINDOWS_ONLY: &str = "视频号自动抓取目前只支持 Windows";
+
 struct AbortOnDrop(JoinHandle<()>);
 
 impl Drop for AbortOnDrop {
@@ -982,6 +985,21 @@ impl WechatCapture {
             watchdog,
         });
         Ok(())
+    }
+
+    #[cfg(not(windows))]
+    pub async fn install_ca(&self) -> Result<(), String> {
+        Err(WINDOWS_ONLY.into())
+    }
+
+    #[cfg(not(windows))]
+    pub async fn remove_ca(&self) -> Result<(), String> {
+        Err(WINDOWS_ONLY.into())
+    }
+
+    #[cfg(not(windows))]
+    pub async fn start(self: &Arc<Self>) -> Result<(), String> {
+        Err(WINDOWS_ONLY.into())
     }
 
     pub async fn stop(&self) -> Result<(), String> {
