@@ -21,7 +21,11 @@ try {
     if ($app.HasExited) { throw "LIVE.exe exited during isolated startup with code $($app.ExitCode)." }
     Write-Host 'LIVE CUDA startup PASS: process remained alive without bundled cublas or CUDA toolkit PATH.'
 } finally {
-    if ($app -and -not $app.HasExited) { Stop-Process -Id $app.Id -Force }
+    if ($app -and -not $app.HasExited) {
+        Stop-Process -Id $app.Id -Force
+        # Stop-Process returns early; the running app still locks files in the folder.
+        $null = $app.WaitForExit(30000)
+    }
     $env:PATH = $previousPath
-    Remove-Item -LiteralPath $directory -Recurse -Force
+    Remove-Item -LiteralPath $directory -Recurse -Force -ErrorAction SilentlyContinue
 }

@@ -18,7 +18,11 @@ try {
     if ($app.HasExited) { throw "Installed LIVE.exe exited during startup with code $($app.ExitCode)." }
     Write-Host "Installed application startup PASS: $([IO.Path]::GetFileName($installerPath))"
 } finally {
-    if ($app -and -not $app.HasExited) { Stop-Process -Id $app.Id -Force }
+    if ($app -and -not $app.HasExited) {
+        Stop-Process -Id $app.Id -Force
+        # Stop-Process returns early; the running app still locks files in the folder.
+        $null = $app.WaitForExit(30000)
+    }
     if ($installProcess -and -not $installProcess.HasExited) { Stop-Process -Id $installProcess.Id -Force }
     $env:PATH = $previousPath
     $uninstaller = Join-Path $directory 'uninstall.exe'
@@ -26,5 +30,5 @@ try {
         $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -PassThru
         if (-not $uninstall.WaitForExit(60000)) { Stop-Process -Id $uninstall.Id -Force }
     }
-    if (Test-Path -LiteralPath $directory) { Remove-Item -LiteralPath $directory -Recurse -Force }
+    if (Test-Path -LiteralPath $directory) { Remove-Item -LiteralPath $directory -Recurse -Force -ErrorAction SilentlyContinue }
 }
