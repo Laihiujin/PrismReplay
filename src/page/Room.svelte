@@ -898,7 +898,7 @@
   }
 
   function addNewRecorder(room_id: string, platform: string, extra: string) {
-    if (extra.includes("?")) {
+    if (platform !== "wechat" && extra.includes("?")) {
       extra = extra.split("?")[0];
     }
 

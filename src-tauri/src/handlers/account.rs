@@ -1294,8 +1294,8 @@ async fn build_account_row(
                 }
             }
         }
-        PlatformType::Youtube => {
-            return Err("Unsupported platform".to_string());
+        PlatformType::Wechat | PlatformType::Youtube => {
+            return Err("该平台不需要账号，请直接导入媒体地址".to_string());
         }
     };
 
@@ -1319,6 +1319,7 @@ async fn build_account_row(
                 PlatformType::TikTok => "TikTok",
                 PlatformType::Weibo => "Weibo",
                 PlatformType::Youtube => "Youtube",
+                PlatformType::Wechat => "视频号",
             }
             .to_string();
             user_info.user_avatar = String::new();
@@ -3501,6 +3502,7 @@ pub async fn ensure_guest_accounts(db: &Database, config: &Config) {
                 PlatformType::TikTok => "TikTok",
                 PlatformType::Weibo => "Weibo",
                 PlatformType::Youtube => "Youtube",
+                PlatformType::Wechat => "视频号",
             };
             if existing.name == expected_name && existing.avatar.is_empty() {
                 continue;

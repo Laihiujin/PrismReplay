@@ -1,0 +1,49 @@
+# 视频号本地适配（隔离测试版）
+
+## 使用范围
+
+在「直播间 → 添加 → 视频号」粘贴自己有权保存的媒体地址或单条资源 JSON。
+
+- 接受腾讯 CDN 的 HTTP(S) m3u8 / flv / mp4 地址，以及视频号 stodownload 地址。
+- wechatVideoDownload：使用其「复制链接」结果。
+- res-downloader：接受 `MediaInfo` 的 `Url` / `Description`，或 `objectDesc.media[0].url` 与不透明 `urlToken`。保留签名查询串，不把它写入房间 ID。
+- 录制沿用现有 HLS 缓存、录像、预览和切片流程；流结束或失败后停止，避免循环下载回放或反复请求过期链接。重新录制需手动启用；签名过期时需要重新捕获并添加地址。
+- **不是全自动微信抓包器**：没有安装根证书、修改系统代理、注入微信、读取微信账号或复制参考项目的二进制。分享页不能当作媒体地址。没有提供视频号弹幕、开播监控或加密视频解密；JSON 标记有解密密钥时明确拒绝。仅有直链但实际加密的媒体会录制失败。
+- 同一路径更换签名仍使用相同房间 ID；新地址需要移除并重新添加该录制源，历史录像不会因此重新抓取。
+
+## 保护已有安装
+
+运行 `scripts/build-local.ps1`（可选 `-Profile release`），仅在当前检出目录生成 `src-tauri/target/local-artifacts`，不会运行安装程序。
+
+本地版同时使用 `isolated-build` 编译特性及 `tauri.local.conf.json`：
+
+- 标识为 `cn.prismreplay.localbuild`，数据库、WebView、配置、账号文件、日志以及默认缓存/输出均独立。
+- 不迁移、不导入 `cn.ShadowVerse` 的配置、账号、数据库或录像；账号文件不从当前工作目录或已安装目录寻找。
+- 独立深链 `prismreplay-local`，不会注册/接管正式版的 `bsr` 链接；静态媒体服务只监听回环地址。
+- 普通正式构建继续沿用原有数据标识，没有改名迁移历史数据。
+
+## 本地验证
+
+```powershell
+python scripts/tests/test_macos_architecture.py
+# 构建脚本自动加载 Rust、CMake、LLVM 路径；先安装 MSVC C++ 工作负载及 Windows SDK。
+pwsh -File scripts/build-local.ps1
+# 设置构建脚本所需 PATH 后，在 src-tauri 目录运行：
+cargo test --locked -p recorder wechat:: --lib
+cargo test --locked -p recorder captures_local_media_and_stops_without_retrying --lib -- --ignored --nocapture
+```
+
+架构参数回归使用命令契约替身，不代表已在 Windows 验证 macOS DMG 的挂载、签名或运行。媒体集成测试只生成并录制本机合成测试视频，不访问真实账号或直播间。
+
+## 上游筛选与冲突
+
+上游为 [Xinrea/bili-shadowreplay](https://github.com/Xinrea/bili-shadowreplay)。本分支没有盲目合入其 274 个差异提交，避免把新版原生渲染器、FFmpeg 架构、数据迁移及产品身份覆盖到当前分支。
+
+- `51789514f8fbc194f4399e73a393b391d6ecdeb8`（#474）：已 cherry-pick。手动解决 `danmu2ass.rs` 冲突，保留本分支渲染接口，合入控制字符清理以及两个适用回归测试；未引入不存在的 native-overlay API。
+- `7656d7b74865e01fb3ac7b7faa11d4517adacd4d`（#457）：把关闭 macOS Whisper OpenMP 的修复适配到现有 `macos-portable.cmake`，不引入不同的 whisper-cpp-rs 包结构。
+- PR #6：修正 arm64 / x86_64 / universal 三个 `lipo` 分支的参数顺序，输入文件必须位于可变长架构参数之前。
+
+## 参考出处
+
+- [qiye45/wechatVideoDownload](https://github.com/qiye45/wechatVideoDownload)：公开仓库主要提供使用说明与示例，用于确认复制媒体链接的交互，不把它当作可直接合并的源码。
+- [putyy/res-downloader](https://github.com/putyy/res-downloader)：参考资源字段格式（`core/shared/base.go` 与 `core/plugins/plugin.qq.com.go`）。本适配器为独立实现，没有复制其代理或脚本注入实现。

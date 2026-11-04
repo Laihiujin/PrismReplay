@@ -59,6 +59,7 @@ pub async fn import_cache_from_path(
             "kuaishou",
             "huya",
             "tiktok",
+            "wechat",
             "weibo",
             "xiaohongshu",
         ] {
@@ -86,6 +87,7 @@ pub async fn import_cache_from_path(
         "kuaishou",
         "huya",
         "tiktok",
+        "wechat",
         "weibo",
         "xiaohongshu",
     ];
