@@ -56,12 +56,12 @@
         return;
       }
 
-      const url = urls[0].replace("prismreplay://", "bsr://");
+      const url = urls[0].replace("live-local://", "live://");
       let platform = "";
       let room_id = "";
 
       const bilibiliPrefixes = [
-        "bsr://live.bilibili.com/",
+        "live://live.bilibili.com/",
         "https://live.bilibili.com/",
         "http://live.bilibili.com/",
       ];
@@ -74,7 +74,7 @@
       }
 
       const douyinPrefixes = [
-        "bsr://live.douyin.com/",
+        "live://live.douyin.com/",
         "https://live.douyin.com/",
         "http://live.douyin.com/",
       ];
@@ -86,14 +86,14 @@
         }
       }
 
-      if (url.startsWith("bsr://live.kuaishou.com/")) {
-        room_id = url.replace("bsr://live.kuaishou.com/", "").split("?")[0];
+      if (url.startsWith("live://live.kuaishou.com/")) {
+        room_id = url.replace("live://live.kuaishou.com/", "").split("?")[0];
         room_id = room_id.replace(/^u\//, "");
         platform = "kuaishou";
       }
 
-      if (url.startsWith("bsr://live.tiktok.com/")) {
-        room_id = url.replace("bsr://live.tiktok.com/", "").split("?")[0];
+      if (url.startsWith("live://live.tiktok.com/")) {
+        room_id = url.replace("live://live.tiktok.com/", "").split("?")[0];
         platform = "tiktok";
       }
 

@@ -6817,7 +6817,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "shadowverse"
+name = "live"
 version = "3.19.11"
 dependencies = [
  "aead",

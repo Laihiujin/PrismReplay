@@ -1,13 +1,13 @@
 {
-  "productName": "PrismReplay-CUDA",
-  "mainBinaryName": "prismreplay",
+  "productName": "LIVE",
+  "mainBinaryName": "LIVE",
   "app": {
     "windows": [
       {
         "label": "main",
         "fullscreen": false,
         "resizable": true,
-        "title": "PrismReplay",
+        "title": "LIVE",
         "width": 1300,
         "height": 600,
         "transparent": false,

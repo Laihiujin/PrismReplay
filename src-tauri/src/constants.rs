@@ -8,6 +8,12 @@ pub const API_PORT: u16 = 3000;
 
 // The experimental executable must never reuse the installed app's storage.
 #[cfg(feature = "isolated-build")]
-pub const APP_DATA_ID: &str = "cn.prismreplay.localbuild";
+pub const APP_DATA_ID: &str = "cn.live.localbuild";
 #[cfg(not(feature = "isolated-build"))]
-pub const APP_DATA_ID: &str = "cn.prismreplay";
+pub const APP_DATA_ID: &str = "cn.live";
+
+// Compatibility inputs for one-time relocation, never active storage IDs.
+#[cfg(feature = "isolated-build")]
+pub const LEGACY_APP_DATA_ID: &str = "cn.prismreplay.localbuild";
+#[cfg(not(feature = "isolated-build"))]
+pub const LEGACY_APP_DATA_ID: &str = "cn.prismreplay";

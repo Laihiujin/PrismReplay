@@ -20,16 +20,20 @@
       "minimumSystemVersion": "13.3"
     }
   },
-  "productName": "PrismReplay",
+  "productName": "LIVE",
   "version": "../package.json",
-  "identifier": "cn.prismreplay",
+  "identifier": "cn.live",
   "plugins": {
     "sql": {
-      "preload": ["sqlite:data_v2.db"]
+      "preload": [
+        "sqlite:data_v2.db"
+      ]
     },
     "deep-link": {
       "desktop": {
-        "schemes": ["prismreplay"]
+        "schemes": [
+          "live"
+        ]
       }
     }
   },
@@ -37,10 +41,13 @@
     "withGlobalTauri": false,
     "security": {
       "assetProtocol": {
-        "scope": ["**"],
+        "scope": [
+          "**"
+        ],
         "enable": true
       },
       "csp": null
     }
-  }
+  },
+  "mainBinaryName": "LIVE"
 }

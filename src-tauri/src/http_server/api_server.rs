@@ -1235,7 +1235,7 @@ async fn handler_upload_files(
     mut multipart: Multipart,
 ) -> Result<Json<ApiResponse<UploadFilesResponse>>, ApiError> {
     let mut uploaded_files = Vec::new();
-    let upload_dir = std::env::temp_dir().join("bsr_uploads");
+    let upload_dir = std::env::temp_dir().join("live_uploads");
 
     // 确保上传目录存在
     if !upload_dir.exists() {
@@ -1306,7 +1306,7 @@ async fn handler_upload_and_import_files(
 ) -> Result<Json<ApiResponse<UploadAndImportResponse>>, ApiError> {
     let mut uploaded_files = Vec::new();
     let mut room_id = "".to_string();
-    let upload_dir = std::env::temp_dir().join("bsr_uploads");
+    let upload_dir = std::env::temp_dir().join("live_uploads");
 
     // 确保上传目录存在
     if !upload_dir.exists() {

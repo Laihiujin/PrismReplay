@@ -36,13 +36,13 @@ fn parse_bool_env(value: &str) -> Option<bool> {
 }
 
 fn prefer_flv_env() -> Option<bool> {
-    std::env::var("BSR_KUAISHOU_PREFER_FLV")
+    std::env::var("LIVE_KUAISHOU_PREFER_FLV")
         .ok()
         .and_then(|v| parse_bool_env(&v))
 }
 
 fn prefer_protocol() -> KuaishouProtocol {
-    if let Ok(value) = std::env::var("BSR_KUAISHOU_PREFER_PROTOCOL") {
+    if let Ok(value) = std::env::var("LIVE_KUAISHOU_PREFER_PROTOCOL") {
         if let Some(protocol) = KuaishouProtocol::from_str(&value) {
             return protocol;
         }
@@ -56,7 +56,7 @@ fn prefer_protocol() -> KuaishouProtocol {
 }
 
 fn protocol_preference_overridden() -> bool {
-    std::env::var("BSR_KUAISHOU_PREFER_PROTOCOL")
+    std::env::var("LIVE_KUAISHOU_PREFER_PROTOCOL")
         .ok()
         .and_then(|value| KuaishouProtocol::from_str(&value))
         .is_some()
@@ -128,8 +128,8 @@ fn select_stream_url(
 }
 
 fn build_account() -> Account {
-    let cookies = std::env::var("BSR_PROBE_COOKIE").unwrap_or_default();
-    let id = std::env::var("BSR_PROBE_ACCOUNT_ID").unwrap_or_else(|_| "guest:probe".to_string());
+    let cookies = std::env::var("LIVE_PROBE_COOKIE").unwrap_or_default();
+    let id = std::env::var("LIVE_PROBE_ACCOUNT_ID").unwrap_or_else(|_| "guest:probe".to_string());
     Account {
         platform: "kuaishou".to_string(),
         id,
@@ -170,7 +170,7 @@ async fn main() {
     let mut client_builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .no_proxy();
-    if let Some(proxy_url) = std::env::var("BSR_PROBE_PROXY")
+    if let Some(proxy_url) = std::env::var("LIVE_PROBE_PROXY")
         .ok()
         .or_else(|| std::env::var("HTTPS_PROXY").ok())
         .or_else(|| std::env::var("HTTP_PROXY").ok())

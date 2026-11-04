@@ -608,7 +608,12 @@ impl Config {
     }
 
     fn normalize_storage_paths(&mut self, default_cache: &Path, default_output: &Path) -> bool {
-        let mut changed = false;
+        let paths = crate::legacy_storage_paths();
+        let cache = crate::data_identity::remap_path(&self.cache, &paths);
+        let output = crate::data_identity::remap_path(&self.output, &paths);
+        let mut changed = cache != self.cache || output != self.output;
+        self.cache = cache;
+        self.output = output;
         if self.cache.trim().is_empty() || Path::new(&self.cache).is_relative() {
             self.cache = default_cache.to_str().unwrap().into();
             changed = true;
@@ -816,8 +821,8 @@ impl Config {
                     config.record_protocol_preference = default_record_protocol_preference();
                     needs_save = true;
                 }
-                if content.contains("BSR_KUAISHOU_ENABLE_FOLLOW_LIST_FALLBACK")
-                    || content.contains("BSR_KUAISHOU_ENABLE_PUBLIC_PAGE_FALLBACK")
+                if content.contains("LIVE_KUAISHOU_ENABLE_FOLLOW_LIST_FALLBACK")
+                    || content.contains("LIVE_KUAISHOU_ENABLE_PUBLIC_PAGE_FALLBACK")
                 {
                     needs_save = true;
                 }
@@ -1052,25 +1057,25 @@ impl Config {
     pub fn apply_record_protocol_env(&self) {
         let value = self.record_protocol_preference.trim();
         if value.is_empty() {
-            std::env::remove_var("BSR_KUAISHOU_PREFER_PROTOCOL");
-            std::env::remove_var("BSR_TIKTOK_PREFER_PROTOCOL");
+            std::env::remove_var("LIVE_KUAISHOU_PREFER_PROTOCOL");
+            std::env::remove_var("LIVE_TIKTOK_PREFER_PROTOCOL");
         } else {
-            std::env::set_var("BSR_KUAISHOU_PREFER_PROTOCOL", value);
-            std::env::set_var("BSR_TIKTOK_PREFER_PROTOCOL", value);
+            std::env::set_var("LIVE_KUAISHOU_PREFER_PROTOCOL", value);
+            std::env::set_var("LIVE_TIKTOK_PREFER_PROTOCOL", value);
         }
     }
 
     pub fn apply_kuaishou_fallback_env(&self) {
         if self.kuaishou_enable_follow_list_fallback {
-            std::env::set_var("BSR_KUAISHOU_ENABLE_FOLLOW_LIST_FALLBACK", "true");
+            std::env::set_var("LIVE_KUAISHOU_ENABLE_FOLLOW_LIST_FALLBACK", "true");
         } else {
-            std::env::remove_var("BSR_KUAISHOU_ENABLE_FOLLOW_LIST_FALLBACK");
+            std::env::remove_var("LIVE_KUAISHOU_ENABLE_FOLLOW_LIST_FALLBACK");
         }
 
         if self.kuaishou_enable_public_page_fallback {
-            std::env::set_var("BSR_KUAISHOU_ENABLE_PUBLIC_PAGE_FALLBACK", "true");
+            std::env::set_var("LIVE_KUAISHOU_ENABLE_PUBLIC_PAGE_FALLBACK", "true");
         } else {
-            std::env::remove_var("BSR_KUAISHOU_ENABLE_PUBLIC_PAGE_FALLBACK");
+            std::env::remove_var("LIVE_KUAISHOU_ENABLE_PUBLIC_PAGE_FALLBACK");
         }
     }
 

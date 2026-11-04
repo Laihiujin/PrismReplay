@@ -1,12 +1,31 @@
 {
-  "productName": "PrismReplay-Local",
-  "identifier": "cn.prismreplay.localbuild",
-  "build": { "beforeBuildCommand": "corepack yarn build" },
-  "bundle": { "active": false },
-  "plugins": { "deep-link": { "desktop": { "schemes": ["prismreplay-local"] } } },
-  "app": { "windows": [{
-    "label": "main", "title": "PrismReplay · 本地隔离测试版",
-    "width": 1300, "height": 700, "resizable": true,
-    "theme": "Dark"
-  }] }
+  "productName": "LIVE",
+  "identifier": "cn.live.localbuild",
+  "build": {
+    "beforeBuildCommand": "corepack yarn build"
+  },
+  "bundle": {
+    "active": false
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "live-local"
+        ]
+      }
+    }
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "LIVE",
+        "width": 1300,
+        "height": 700,
+        "resizable": true,
+        "theme": "Dark"
+      }
+    ]
+  }
 }

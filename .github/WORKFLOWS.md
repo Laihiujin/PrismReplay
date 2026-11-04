@@ -59,8 +59,8 @@ git push origin v2.17.7
 
 **构建产物：**
 - DMG 文件会作为 Artifacts 上传，可在 Actions 运行页面下载
-- 文件命名格式：`ShadowVerse_{version}_{arch}.dmg`
-  - 例如：`ShadowVerse_2.17.7_aarch64.dmg`
+- 文件命名格式：`LIVE_{version}_{arch}.dmg`
+  - 例如：`LIVE_2.17.7_aarch64.dmg`
 
 ### 3. Docker Build and Push (`package.yml`)
 

@@ -211,40 +211,40 @@ fn read_env_bool(key: &str) -> Option<bool> {
 
 fn use_public_page_fallback(account: &Account) -> bool {
     let _ = account;
-    read_env_bool("BSR_KUAISHOU_ENABLE_PUBLIC_PAGE_FALLBACK").unwrap_or(false)
+    read_env_bool("LIVE_KUAISHOU_ENABLE_PUBLIC_PAGE_FALLBACK").unwrap_or(false)
 }
 
 fn use_follow_list_fallback(account: &Account) -> bool {
     let _ = account;
-    read_env_bool("BSR_KUAISHOU_ENABLE_FOLLOW_LIST_FALLBACK").unwrap_or(false)
+    read_env_bool("LIVE_KUAISHOU_ENABLE_FOLLOW_LIST_FALLBACK").unwrap_or(false)
 }
 
 fn use_room_page_kww_probe() -> bool {
-    read_env_bool("BSR_KUAISHOU_ENABLE_KWW_PROBE").unwrap_or(false)
+    read_env_bool("LIVE_KUAISHOU_ENABLE_KWW_PROBE").unwrap_or(false)
 }
 
 fn use_gdfp_prefetch() -> bool {
-    read_env_bool("BSR_KUAISHOU_ENABLE_GDFP_PREFLIGHT").unwrap_or(true)
+    read_env_bool("LIVE_KUAISHOU_ENABLE_GDFP_PREFLIGHT").unwrap_or(true)
 }
 
 fn web_cooldown_secs() -> i64 {
     read_env_u64(
-        "BSR_KUAISHOU_WEB_COOLDOWN_SECS",
+        "LIVE_KUAISHOU_WEB_COOLDOWN_SECS",
         WEB_RATE_LIMIT_COOLDOWN_SECS as u64,
     ) as i64
 }
 
 fn web_retry_secs() -> u64 {
-    read_env_u64("BSR_KUAISHOU_WEB_RETRY_SECS", WEB_RATE_LIMIT_RETRY_SECS)
+    read_env_u64("LIVE_KUAISHOU_WEB_RETRY_SECS", WEB_RATE_LIMIT_RETRY_SECS)
 }
 
 fn web_min_request_gap_ms() -> u64 {
-    read_env_u64("BSR_KUAISHOU_WEB_MIN_GAP_MS", WEB_MIN_REQUEST_GAP_MS)
+    read_env_u64("LIVE_KUAISHOU_WEB_MIN_GAP_MS", WEB_MIN_REQUEST_GAP_MS)
 }
 
 fn web_request_jitter_ms() -> u64 {
     read_env_u64(
-        "BSR_KUAISHOU_WEB_MIN_GAP_JITTER_MS",
+        "LIVE_KUAISHOU_WEB_MIN_GAP_JITTER_MS",
         WEB_MIN_REQUEST_GAP_JITTER_MS,
     )
 }
@@ -353,7 +353,7 @@ fn should_use_global_web_cooldown(account: &Account) -> bool {
     if account.is_guest() {
         return false;
     }
-    read_env_bool("BSR_KUAISHOU_LOGIN_GLOBAL_COOLDOWN").unwrap_or(false)
+    read_env_bool("LIVE_KUAISHOU_LOGIN_GLOBAL_COOLDOWN").unwrap_or(false)
 }
 
 fn web_cooldown_error() -> RecorderError {
@@ -1818,14 +1818,14 @@ struct KwwProbeCacheEntry {
 
 fn kww_probe_cache_ttl_secs() -> i64 {
     read_env_u64(
-        "BSR_KUAISHOU_KWW_PROBE_CACHE_TTL_SECS",
+        "LIVE_KUAISHOU_KWW_PROBE_CACHE_TTL_SECS",
         KWW_PROBE_CACHE_TTL_SECS as u64,
     ) as i64
 }
 
 fn kww_probe_miss_ttl_secs() -> i64 {
     read_env_u64(
-        "BSR_KUAISHOU_KWW_PROBE_MISS_TTL_SECS",
+        "LIVE_KUAISHOU_KWW_PROBE_MISS_TTL_SECS",
         KWW_PROBE_MISS_TTL_SECS as u64,
     ) as i64
 }
@@ -1936,7 +1936,7 @@ fn follow_item_matches(item: &UserFollowLive, room_id: &str, author_id: &str, au
 }
 
 fn should_homepage_prewarm(account: &Account) -> bool {
-    if let Some(enabled) = read_env_bool("BSR_KUAISHOU_HOMEPAGE_PREWARM") {
+    if let Some(enabled) = read_env_bool("LIVE_KUAISHOU_HOMEPAGE_PREWARM") {
         return enabled;
     }
     account.is_guest()
@@ -1944,14 +1944,14 @@ fn should_homepage_prewarm(account: &Account) -> bool {
 
 fn follow_info_cache_ttl_secs() -> i64 {
     read_env_u64(
-        "BSR_KUAISHOU_FOLLOW_CACHE_TTL_SECS",
+        "LIVE_KUAISHOU_FOLLOW_CACHE_TTL_SECS",
         FOLLOW_INFO_CACHE_TTL_SECS as u64,
     ) as i64
 }
 
 fn follow_info_miss_ttl_secs() -> i64 {
     read_env_u64(
-        "BSR_KUAISHOU_FOLLOW_MISS_TTL_SECS",
+        "LIVE_KUAISHOU_FOLLOW_MISS_TTL_SECS",
         FOLLOW_INFO_MISS_TTL_SECS as u64,
     ) as i64
 }
@@ -2040,7 +2040,7 @@ fn extract_kuaishou_kww(cookies: &str) -> Option<String> {
 }
 
 fn get_kuaishou_kww_override() -> Option<String> {
-    for key in ["BSR_KUAISHOU_KWW", "KUAISHOU_KWW"] {
+    for key in ["LIVE_KUAISHOU_KWW", "KUAISHOU_KWW"] {
         if let Ok(value) = std::env::var(key) {
             let trimmed = value.trim();
             if !trimmed.is_empty() {

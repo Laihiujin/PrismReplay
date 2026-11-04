@@ -1,11 +1,11 @@
 import { chromium } from '/tmp/kprobe/node_modules/playwright-core/index.mjs';
 
 const targetUrl = process.argv[2] || 'https://live.kuaishou.com/u/3xpscnxnjcai83q';
-const cookieHeader = process.env.BSR_BROWSER_COOKIE || '';
-const waitMs = Number(process.env.BSR_BROWSER_WAIT_MS || '15000');
-const proxyServer = process.env.BSR_BROWSER_PROXY || '';
+const cookieHeader = process.env.LIVE_BROWSER_COOKIE || '';
+const waitMs = Number(process.env.LIVE_BROWSER_WAIT_MS || '15000');
+const proxyServer = process.env.LIVE_BROWSER_PROXY || '';
 const disableProxy = ['1', 'true', 'yes', 'on'].includes(
-  String(process.env.BSR_BROWSER_NO_PROXY || '').trim().toLowerCase()
+  String(process.env.LIVE_BROWSER_NO_PROXY || '').trim().toLowerCase()
 );
 
 const interesting = [

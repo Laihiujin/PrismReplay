@@ -77,10 +77,10 @@ ENV PATH="/app:${PATH}"
 COPY --from=frontend-builder /app/dist ./dist
 
 # Copy built Rust binary
-COPY --from=rust-builder /app/src-tauri/target/release/shadowverse ./
+COPY --from=rust-builder /app/src-tauri/target/release/live ./LIVE
 
 # Expose port
 EXPOSE 3000
 
 # Run the application
-CMD ["sh", "-c", "nscd && ./shadowverse"]
+CMD ["sh", "-c", "nscd && ./LIVE"]

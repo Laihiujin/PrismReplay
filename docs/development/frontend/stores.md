@@ -2,7 +2,7 @@
 
 ## 概述
 
-BiliBili ShadowReplay 使用 Svelte 的响应式存储 (Stores) 来管理全局状态。所有 stores 位于 `src/lib/stores/` 目录。
+LIVE 使用 Svelte 的响应式存储 (Stores) 来管理全局状态。所有 stores 位于 `src/lib/stores/` 目录。
 
 ## Svelte Stores 基础
 

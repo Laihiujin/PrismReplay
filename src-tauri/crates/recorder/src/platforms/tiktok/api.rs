@@ -1614,7 +1614,7 @@ fn to_mobile_url(url: &str) -> String {
 }
 
 fn force_mobile_fallback() -> bool {
-    std::env::var("BSR_TIKTOK_FORCE_MOBILE")
+    std::env::var("LIVE_TIKTOK_FORCE_MOBILE")
         .map(|v| {
             let v = v.to_ascii_lowercase();
             v == "1" || v == "true" || v == "yes" || v == "on"
@@ -4107,16 +4107,16 @@ mod tests {
 
     #[test]
     fn force_mobile_env_flag() {
-        std::env::remove_var("BSR_TIKTOK_FORCE_MOBILE");
+        std::env::remove_var("LIVE_TIKTOK_FORCE_MOBILE");
         assert!(!force_mobile_fallback());
 
-        std::env::set_var("BSR_TIKTOK_FORCE_MOBILE", "true");
+        std::env::set_var("LIVE_TIKTOK_FORCE_MOBILE", "true");
         assert!(force_mobile_fallback());
 
-        std::env::set_var("BSR_TIKTOK_FORCE_MOBILE", "0");
+        std::env::set_var("LIVE_TIKTOK_FORCE_MOBILE", "0");
         assert!(!force_mobile_fallback());
 
-        std::env::remove_var("BSR_TIKTOK_FORCE_MOBILE");
+        std::env::remove_var("LIVE_TIKTOK_FORCE_MOBILE");
     }
 }
 

@@ -378,13 +378,13 @@ impl KuaishouRecorder {
     }
 
     fn prefer_flv_env() -> Option<bool> {
-        std::env::var("BSR_KUAISHOU_PREFER_FLV")
+        std::env::var("LIVE_KUAISHOU_PREFER_FLV")
             .ok()
             .and_then(|v| Self::parse_bool_env(&v))
     }
 
     fn prefer_protocol() -> KuaishouProtocol {
-        if let Ok(value) = std::env::var("BSR_KUAISHOU_PREFER_PROTOCOL") {
+        if let Ok(value) = std::env::var("LIVE_KUAISHOU_PREFER_PROTOCOL") {
             if let Some(protocol) = KuaishouProtocol::from_str(&value) {
                 return protocol;
             }
@@ -398,7 +398,7 @@ impl KuaishouRecorder {
     }
 
     fn protocol_preference_overridden() -> bool {
-        std::env::var("BSR_KUAISHOU_PREFER_PROTOCOL")
+        std::env::var("LIVE_KUAISHOU_PREFER_PROTOCOL")
             .ok()
             .and_then(|value| KuaishouProtocol::from_str(&value))
             .is_some()
@@ -406,7 +406,7 @@ impl KuaishouRecorder {
     }
 
     fn startup_stagger_max_secs() -> u64 {
-        std::env::var("BSR_KUAISHOU_STARTUP_STAGGER_SECS")
+        std::env::var("LIVE_KUAISHOU_STARTUP_STAGGER_SECS")
             .ok()
             .and_then(|v| v.trim().parse::<u64>().ok())
             .unwrap_or(2)
@@ -430,19 +430,19 @@ impl KuaishouRecorder {
     }
 
     fn rate_limit_base_backoff_secs() -> u64 {
-        Self::read_env_u64("BSR_KUAISHOU_RATE_LIMIT_BASE_BACKOFF_SECS", 30)
+        Self::read_env_u64("LIVE_KUAISHOU_RATE_LIMIT_BASE_BACKOFF_SECS", 30)
     }
 
     fn rate_limit_max_backoff_secs() -> u64 {
-        Self::read_env_u64("BSR_KUAISHOU_RATE_LIMIT_MAX_BACKOFF_SECS", 300)
+        Self::read_env_u64("LIVE_KUAISHOU_RATE_LIMIT_MAX_BACKOFF_SECS", 300)
     }
 
     fn max_idle_poll_secs() -> u64 {
-        Self::read_env_u64("BSR_KUAISHOU_MAX_IDLE_POLL_SECS", 18)
+        Self::read_env_u64("LIVE_KUAISHOU_MAX_IDLE_POLL_SECS", 18)
     }
 
     fn fast_probe_rounds() -> u64 {
-        Self::read_env_u64("BSR_KUAISHOU_FAST_PROBE_ROUNDS", 4)
+        Self::read_env_u64("LIVE_KUAISHOU_FAST_PROBE_ROUNDS", 4)
     }
 
     fn apply_rate_limit_backoff(&self) {
@@ -1145,11 +1145,11 @@ impl RecorderTrait<KuaishouExtra> for KuaishouRecorder {
                     if self_clone.extra.should_continue.load(Ordering::Relaxed) {
                         continue;
                     }
-                    let error_backoff = std::env::var("BSR_KUAISHOU_ERROR_BACKOFF_SECS")
+                    let error_backoff = std::env::var("LIVE_KUAISHOU_ERROR_BACKOFF_SECS")
                         .ok()
                         .and_then(|v| v.trim().parse::<u64>().ok())
                         .unwrap_or(60);
-                    let error_window = std::env::var("BSR_KUAISHOU_ERROR_WINDOW_SECS")
+                    let error_window = std::env::var("LIVE_KUAISHOU_ERROR_WINDOW_SECS")
                         .ok()
                         .and_then(|v| v.trim().parse::<u64>().ok())
                         .unwrap_or(120);
@@ -1187,11 +1187,11 @@ impl RecorderTrait<KuaishouExtra> for KuaishouRecorder {
 
                 let mut sleep_secs = crate::utils::jitter_interval_secs(effective_interval, 6);
                 sleep_secs = sleep_secs.max(effective_interval);
-                let error_backoff = std::env::var("BSR_KUAISHOU_ERROR_BACKOFF_SECS")
+                let error_backoff = std::env::var("LIVE_KUAISHOU_ERROR_BACKOFF_SECS")
                     .ok()
                     .and_then(|v| v.trim().parse::<u64>().ok())
                     .unwrap_or(60);
-                let error_window = std::env::var("BSR_KUAISHOU_ERROR_WINDOW_SECS")
+                let error_window = std::env::var("LIVE_KUAISHOU_ERROR_WINDOW_SECS")
                     .ok()
                     .and_then(|v| v.trim().parse::<u64>().ok())
                     .unwrap_or(120);

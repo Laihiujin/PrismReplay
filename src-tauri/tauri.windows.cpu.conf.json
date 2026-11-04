@@ -1,13 +1,13 @@
 {
-  "productName": "PrismReplay-CPU",
-  "mainBinaryName": "prismreplay",
+  "productName": "LIVE",
+  "mainBinaryName": "LIVE",
   "app": {
     "windows": [
       {
         "label": "main",
         "fullscreen": false,
         "resizable": true,
-        "title": "PrismReplay",
+        "title": "LIVE",
         "width": 1300,
         "height": 700,
         "transparent": false,
@@ -17,6 +17,10 @@
     ]
   },
   "bundle": {
-    "resources": ["ffmpeg.exe", "ffplay.exe", "ffprobe.exe"]
+    "resources": [
+      "ffmpeg.exe",
+      "ffplay.exe",
+      "ffprobe.exe"
+    ]
   }
 }

@@ -157,7 +157,7 @@ mod tests {
     #[ignore = "Requires ffmpeg on PATH; generates only synthetic local media"]
     async fn captures_local_media_and_stops_without_retrying() {
         let output =
-            std::env::temp_dir().join(format!("prismreplay-wechat-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("live-wechat-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&output).unwrap();
         let fixture = output.join("synthetic input.mp4");
         assert!(std::process::Command::new("ffmpeg")

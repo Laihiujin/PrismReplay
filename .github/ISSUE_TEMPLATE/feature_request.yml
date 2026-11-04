@@ -3,7 +3,7 @@ description: 提交新功能的需求
 title: "[feature] "
 labels: ["feature"]
 assignees:
-  - Xinrea
+  - Laihiujin
 body:
   - type: textarea
     attributes:

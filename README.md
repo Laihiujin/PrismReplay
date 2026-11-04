@@ -1,10 +1,12 @@
-# PrismReplay
+# LIVE
 
-[![Build](https://img.shields.io/github/actions/workflow/status/Laihiujin/PrismReplay/main.yml?label=Build)](../../actions)
-[![Release](https://img.shields.io/github/v/release/Laihiujin/PrismReplay)](../../releases)
+<img src="assets/branding/LIVE.png" width="128" alt="LIVE" />
+
+[![Build](https://img.shields.io/github/actions/workflow/status/Laihiujin/LIVE/main.yml?label=Build)](../../actions)
+[![Release](https://img.shields.io/github/v/release/Laihiujin/LIVE)](../../releases)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
-[PrismReplay](https://github.com/Laihiujin/PrismReplay) 是一个可视化矩阵直播录制的切片工具，支持B站、抖音、快手、虎牙、tiktok，及全平台内置浏览器登录、逆向工程二维码登录、访客模式（无需登录即可录播）、重载以往缓存直播记录；
+[LIVE](https://github.com/Laihiujin/LIVE) 是一个可视化矩阵直播录制的切片工具，支持B站、抖音、快手、虎牙、tiktok，及全平台内置浏览器登录、逆向工程二维码登录、访客模式（无需登录即可录播）、重载以往缓存直播记录；
 
 ## 支持平台
 
@@ -62,9 +64,9 @@
 
 | 文件 | 说明 |
 |---|---|
-| `PrismReplay_x.y.z_x64-setup.exe` | Windows |
-| `PrismReplay_x.y.z_aarch64.dmg` | macOS Apple Silicon |
-| `PrismReplay_x.y.z_x86_64.dmg` | macOS Intel |
+| `LIVE_x.y.z_x64-setup.exe` | Windows |
+| `LIVE_x.y.z_aarch64.dmg` | macOS Apple Silicon |
+| `LIVE_x.y.z_x86_64.dmg` | macOS Intel |
 
 ## 致谢
 

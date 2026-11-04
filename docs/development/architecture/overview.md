@@ -2,7 +2,7 @@
 
 ## 技术栈
 
-BiliBili ShadowReplay 是一个基于 Tauri 2 的混合桌面应用，采用前后端分离架构。
+LIVE 是一个基于 Tauri 2 的混合桌面应用，采用前后端分离架构。
 
 ### 前端技术栈
 

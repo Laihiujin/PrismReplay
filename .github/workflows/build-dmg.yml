@@ -95,19 +95,19 @@ jobs:
         if: github.event_name == 'push' || github.event.inputs.target == 'universal'
         run: |
           mkdir -p .artifacts
-          tar -C src-tauri/target/aarch64-apple-darwin/release/bundle/macos -czf .artifacts/PrismReplay-aarch64.app.tar.gz PrismReplay.app
+          tar -C src-tauri/target/aarch64-apple-darwin/release/bundle/macos -czf .artifacts/LIVE-aarch64.app.tar.gz LIVE.app
 
       - name: Upload Apple Silicon app artifact
         if: github.event_name == 'push' || github.event.inputs.target == 'universal'
         uses: actions/upload-artifact@v4
         with:
-          name: PrismReplay-app-aarch64
-          path: .artifacts/PrismReplay-aarch64.app.tar.gz
+          name: LIVE-app-aarch64
+          path: .artifacts/LIVE-aarch64.app.tar.gz
           if-no-files-found: error
 
       - name: Notarize and staple Apple Silicon DMG
         run: |
-          DMG="src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/PrismReplay_${{ steps.version.outputs.version }}_aarch64.dmg"
+          DMG="src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/LIVE_${{ steps.version.outputs.version }}_aarch64.dmg"
           if [ -z "${APPLE_ID}" ] || [ -z "${APPLE_PASSWORD}" ] || [ -z "${APPLE_TEAM_ID}" ]; then
             echo "Skipping notarization: APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID not fully configured."
             exit 0
@@ -117,13 +117,13 @@ jobs:
           xcrun stapler validate "$DMG"
 
       - name: Validate Apple Silicon DMG
-        run: hdiutil verify "src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/PrismReplay_${{ steps.version.outputs.version }}_aarch64.dmg"
+        run: hdiutil verify "src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/LIVE_${{ steps.version.outputs.version }}_aarch64.dmg"
 
       - name: Upload Apple Silicon DMG
         uses: actions/upload-artifact@v4
         with:
-          name: PrismReplay-macOS-aarch64
-          path: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/PrismReplay_${{ steps.version.outputs.version }}_aarch64.dmg
+          name: LIVE-macOS-aarch64
+          path: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/LIVE_${{ steps.version.outputs.version }}_aarch64.dmg
           if-no-files-found: error
 
   build-x64:
@@ -187,19 +187,19 @@ jobs:
         if: github.event_name == 'push' || github.event.inputs.target == 'universal'
         run: |
           mkdir -p .artifacts
-          tar -C src-tauri/target/x86_64-apple-darwin/release/bundle/macos -czf .artifacts/PrismReplay-x86_64.app.tar.gz PrismReplay.app
+          tar -C src-tauri/target/x86_64-apple-darwin/release/bundle/macos -czf .artifacts/LIVE-x86_64.app.tar.gz LIVE.app
 
       - name: Upload Intel app artifact
         if: github.event_name == 'push' || github.event.inputs.target == 'universal'
         uses: actions/upload-artifact@v4
         with:
-          name: PrismReplay-app-x86_64
-          path: .artifacts/PrismReplay-x86_64.app.tar.gz
+          name: LIVE-app-x86_64
+          path: .artifacts/LIVE-x86_64.app.tar.gz
           if-no-files-found: error
 
       - name: Notarize and staple Intel DMG
         run: |
-          DMG="src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/PrismReplay_${{ steps.version.outputs.version }}_x86_64.dmg"
+          DMG="src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/LIVE_${{ steps.version.outputs.version }}_x86_64.dmg"
           if [ -z "${APPLE_ID}" ] || [ -z "${APPLE_PASSWORD}" ] || [ -z "${APPLE_TEAM_ID}" ]; then
             echo "Skipping notarization: APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID not fully configured."
             exit 0
@@ -209,13 +209,13 @@ jobs:
           xcrun stapler validate "$DMG"
 
       - name: Validate Intel DMG
-        run: hdiutil verify "src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/PrismReplay_${{ steps.version.outputs.version }}_x86_64.dmg"
+        run: hdiutil verify "src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/LIVE_${{ steps.version.outputs.version }}_x86_64.dmg"
 
       - name: Upload Intel DMG
         uses: actions/upload-artifact@v4
         with:
-          name: PrismReplay-macOS-x86_64
-          path: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/PrismReplay_${{ steps.version.outputs.version }}_x86_64.dmg
+          name: LIVE-macOS-x86_64
+          path: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/LIVE_${{ steps.version.outputs.version }}_x86_64.dmg
           if-no-files-found: error
 
   build-universal:
@@ -246,21 +246,21 @@ jobs:
       - name: Download Apple Silicon app artifact
         uses: actions/download-artifact@v4
         with:
-          name: PrismReplay-app-aarch64
+          name: LIVE-app-aarch64
           path: .artifacts/aarch64
 
       - name: Download Intel app artifact
         uses: actions/download-artifact@v4
         with:
-          name: PrismReplay-app-x86_64
+          name: LIVE-app-x86_64
           path: .artifacts/x86_64
 
       - name: Restore app bundles
         run: |
           mkdir -p src-tauri/target/aarch64-apple-darwin/release/bundle/macos
           mkdir -p src-tauri/target/x86_64-apple-darwin/release/bundle/macos
-          tar -C src-tauri/target/aarch64-apple-darwin/release/bundle/macos -xzf .artifacts/aarch64/PrismReplay-aarch64.app.tar.gz
-          tar -C src-tauri/target/x86_64-apple-darwin/release/bundle/macos -xzf .artifacts/x86_64/PrismReplay-x86_64.app.tar.gz
+          tar -C src-tauri/target/aarch64-apple-darwin/release/bundle/macos -xzf .artifacts/aarch64/LIVE-aarch64.app.tar.gz
+          tar -C src-tauri/target/x86_64-apple-darwin/release/bundle/macos -xzf .artifacts/x86_64/LIVE-x86_64.app.tar.gz
 
       - name: Prepare macOS signing env
         shell: bash
@@ -278,15 +278,15 @@ jobs:
       - name: Build Universal app and DMG
         run: |
           mkdir -p src-tauri/target/universal-apple-darwin/release/bundle/macos
-          cp -R src-tauri/target/aarch64-apple-darwin/release/bundle/macos/PrismReplay.app \
-            src-tauri/target/universal-apple-darwin/release/bundle/macos/PrismReplay.app
+          cp -R src-tauri/target/aarch64-apple-darwin/release/bundle/macos/LIVE.app \
+            src-tauri/target/universal-apple-darwin/release/bundle/macos/LIVE.app
 
           lipo -create \
-            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/PrismReplay.app/Contents/MacOS/shadowverse \
-            src-tauri/target/x86_64-apple-darwin/release/bundle/macos/PrismReplay.app/Contents/MacOS/shadowverse \
-            -output src-tauri/target/universal-apple-darwin/release/bundle/macos/PrismReplay.app/Contents/MacOS/shadowverse
+            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/LIVE.app/Contents/MacOS/LIVE \
+            src-tauri/target/x86_64-apple-darwin/release/bundle/macos/LIVE.app/Contents/MacOS/LIVE \
+            -output src-tauri/target/universal-apple-darwin/release/bundle/macos/LIVE.app/Contents/MacOS/LIVE
 
-          UNIVERSAL_APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/PrismReplay.app"
+          UNIVERSAL_APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/LIVE.app"
           if [ -n "${APPLE_SIGNING_IDENTITY}" ]; then
             codesign --force --deep --options runtime --sign "${APPLE_SIGNING_IDENTITY}" "$UNIVERSAL_APP"
           else
@@ -302,7 +302,7 @@ jobs:
 
       - name: Notarize and staple Universal DMG
         run: |
-          DMG="src-tauri/target/universal-apple-darwin/release/bundle/dmg/PrismReplay_${{ steps.version.outputs.version }}_universal.dmg"
+          DMG="src-tauri/target/universal-apple-darwin/release/bundle/dmg/LIVE_${{ steps.version.outputs.version }}_universal.dmg"
           if [ -z "${APPLE_ID}" ] || [ -z "${APPLE_PASSWORD}" ] || [ -z "${APPLE_TEAM_ID}" ]; then
             echo "Skipping notarization: APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID not fully configured."
             exit 0
@@ -312,11 +312,11 @@ jobs:
           xcrun stapler validate "$DMG"
 
       - name: Validate Universal DMG
-        run: hdiutil verify "src-tauri/target/universal-apple-darwin/release/bundle/dmg/PrismReplay_${{ steps.version.outputs.version }}_universal.dmg"
+        run: hdiutil verify "src-tauri/target/universal-apple-darwin/release/bundle/dmg/LIVE_${{ steps.version.outputs.version }}_universal.dmg"
 
       - name: Upload Universal DMG
         uses: actions/upload-artifact@v4
         with:
-          name: PrismReplay-macOS-universal
-          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/PrismReplay_${{ steps.version.outputs.version }}_universal.dmg
+          name: LIVE-macOS-universal
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/LIVE_${{ steps.version.outputs.version }}_universal.dmg
           if-no-files-found: error
