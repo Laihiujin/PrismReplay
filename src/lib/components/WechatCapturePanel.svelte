@@ -7,6 +7,8 @@
     kind: string;
     host: string;
     seen_at_ms: number;
+    room_name: string | null;
+    room_title: string | null;
   }
   interface Status {
     supported: boolean;
@@ -16,6 +18,7 @@
     replaced_existing_proxy: boolean;
     candidates: Candidate[];
     hosts: string[];
+    json_endpoints: string[];
   }
 
   const dispatch = createEventDispatcher<{ select: string }>();
@@ -24,11 +27,35 @@
   let error = "";
   let timer: ReturnType<typeof setInterval> | null = null;
   let finishedWithoutResult = false;
+  // A failed preview is remembered so that a dead stream is not retried on every refresh.
+  let previews: Record<string, string> = {};
+
+  function loadPreviews(candidates: Candidate[]) {
+    for (const candidate of candidates) {
+      if (candidate.url in previews) continue;
+      previews[candidate.url] = "";
+      invoke("wechat_capture_preview", { url: candidate.url })
+        .then((image) => (previews[candidate.url] = image as string))
+        .catch(() => (previews[candidate.url] = "failed"));
+    }
+  }
+
+  function streamLabel(candidate: Candidate) {
+    if (candidate.room_name) return candidate.room_name;
+    const id = candidate.url.match(/live_(\d+)/);
+    return id ? `直播 …${id[1].slice(-6)}` : candidate.host;
+  }
+
+  function quality(candidate: Candidate) {
+    const q = candidate.url.match(/[?&]q=(\d+)/);
+    return q ? ` · q=${q[1]}` : "";
+  }
 
   async function refresh() {
     try {
       const wasRunning = status?.running;
       status = (await invoke("wechat_capture_status")) as Status;
+      loadPreviews(status.candidates);
       if (status.running && !timer) {
         timer = setInterval(refresh, 1500);
       } else if (!status.running && timer) {
@@ -59,7 +86,11 @@
     await run("wechat_capture_stop");
     dispatch(
       "select",
-      JSON.stringify({ url: candidate.url, title: "视频号直播", captured_stream: true }),
+      JSON.stringify({
+        url: candidate.url,
+        title: candidate.room_title || candidate.room_name || "视频号直播",
+        captured_stream: true,
+      }),
     );
   }
 
@@ -105,17 +136,7 @@
       {#if status.replaced_existing_proxy}
         <p class="text-xs text-amber-600 dark:text-amber-400">你原来开着系统代理，抓取期间其他软件不会经过它，结束后自动恢复。</p>
       {/if}
-      {#if status.candidates.length > 0}
-        <ul class="space-y-1">
-          {#each status.candidates as candidate (candidate.url)}
-            <li class="flex items-center justify-between gap-2 rounded-md bg-white dark:bg-[#2c2c2e] px-2 py-1.5">
-              <span class="text-xs truncate" title={candidate.host}>{candidate.kind.toUpperCase()} · {candidate.host}</span>
-              <button class="shrink-0 px-2 py-1 text-xs rounded-md bg-blue-600 text-white disabled:opacity-50" disabled={busy}
-                on:click={() => choose(candidate)}>使用这个</button>
-            </li>
-          {/each}
-        </ul>
-      {:else}
+      {#if status.candidates.length === 0}
         <p class="text-xs text-gray-500 dark:text-gray-400">还没有发现直播流…</p>
         {#if status.hosts.length > 0}
           <details class="text-xs text-gray-500 dark:text-gray-400">
@@ -126,6 +147,37 @@
       {/if}
       <button class="px-3 py-1.5 text-xs rounded-md text-gray-600 dark:text-gray-400 hover:underline disabled:opacity-50" disabled={busy}
         on:click={() => run("wechat_capture_stop")}>停止抓取</button>
+    {/if}
+
+    {#if status.candidates.length > 0}
+      <ul class="space-y-1 max-h-72 overflow-y-auto">
+        {#each status.candidates as candidate (candidate.url)}
+          <li class="flex items-center gap-2 rounded-md bg-white dark:bg-[#2c2c2e] p-2">
+            <div class="shrink-0 w-14 h-24 rounded bg-black/20 flex items-center justify-center overflow-hidden">
+              {#if previews[candidate.url] && previews[candidate.url] !== "failed"}
+                <img src={previews[candidate.url]} alt="直播画面" class="w-full h-full object-cover" />
+              {:else}
+                <span class="text-[10px] text-gray-500">{previews[candidate.url] === "failed" ? "无画面" : "加载中"}</span>
+              {/if}
+            </div>
+            <div class="min-w-0 flex-1 text-xs">
+              <div class="truncate font-medium text-gray-900 dark:text-white" title={streamLabel(candidate)}>{streamLabel(candidate)}</div>
+              {#if candidate.room_title}
+                <div class="truncate" title={candidate.room_title}>{candidate.room_title}</div>
+              {/if}
+              <div class="truncate text-gray-500 dark:text-gray-400" title={candidate.host}>{candidate.kind.toUpperCase()}{quality(candidate)} · {candidate.host}</div>
+            </div>
+            <button class="shrink-0 px-2 py-1 text-xs rounded-md bg-blue-600 text-white disabled:opacity-50" disabled={busy}
+              on:click={() => choose(candidate)}>使用这个</button>
+          </li>
+        {/each}
+      </ul>
+      {#if status.candidates.some((candidate) => !candidate.room_name) && status.json_endpoints.length > 0}
+        <details class="text-xs text-gray-500 dark:text-gray-400">
+          <summary class="cursor-pointer">没有名字？已读取的接口（{status.json_endpoints.length}）</summary>
+          <p class="mt-1 break-all">{status.json_endpoints.join("  ")}</p>
+        </details>
+      {/if}
     {/if}
 
     {#if error}

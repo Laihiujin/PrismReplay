@@ -16,11 +16,13 @@ use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, GeneralSubtree, IsCa, Issuer,
     KeyPair, KeyUsagePurpose, NameConstraints, SerialNumber,
 };
+use http_body_util::BodyExt;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex as StdMutex},
+    sync::{Arc, Mutex as StdMutex, OnceLock},
     time::Duration,
 };
 use tokio::{net::TcpListener, sync::oneshot, sync::Mutex, task::JoinHandle};
@@ -51,6 +53,9 @@ pub struct StreamCandidate {
     pub kind: String,
     pub host: String,
     pub seen_at_ms: i64,
+    /// Host name and topic, when WeChat's own responses mention this stream.
+    pub room_name: Option<String>,
+    pub room_title: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -64,6 +69,8 @@ pub struct CaptureStatus {
     pub candidates: Vec<StreamCandidate>,
     /// Hostnames seen during this capture; not persisted, shown when nothing was found.
     pub hosts: Vec<String>,
+    /// JSON endpoints seen during this capture, to diagnose a missing room name.
+    pub json_endpoints: Vec<String>,
 }
 
 fn host_matches(host: &str, suffixes: &[String]) -> bool {
@@ -99,6 +106,81 @@ fn kind_from_content_type(content_type: &str) -> Option<&'static str> {
 struct Findings {
     candidates: Vec<StreamCandidate>,
     hosts: BTreeSet<String>,
+    rooms: HashMap<String, RoomInfo>,
+    json_endpoints: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct RoomInfo {
+    name: String,
+    title: Option<String>,
+}
+
+fn live_id_regex() -> &'static regex::Regex {
+    static PATTERN: OnceLock<regex::Regex> = OnceLock::new();
+    PATTERN.get_or_init(|| regex::Regex::new(r"live_\d{6,}").unwrap())
+}
+
+fn live_id_of(url: &str) -> Option<String> {
+    live_id_regex().find(url).map(|m| m.as_str().to_string())
+}
+
+fn first_text(object: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| object.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(|text| text.chars().take(120).collect())
+}
+
+/// Finds the deepest object that names a host and whose contents mention the stream. Requiring the
+/// stream ID avoids mislabelling a stream with the nickname of a commenter or another room.
+fn find_room(value: &Value, live_id: &str, found: &mut Option<RoomInfo>) -> bool {
+    match value {
+        Value::String(text) => text.contains(live_id),
+        Value::Array(items) => items
+            .iter()
+            .fold(false, |seen, item| find_room(item, live_id, found) || seen),
+        Value::Object(object) => {
+            let mentions = object
+                .values()
+                .fold(false, |seen, item| find_room(item, live_id, found) || seen);
+            if mentions && found.is_none() {
+                let name = first_text(
+                    object,
+                    &["nickname", "nickName", "anchorNickname", "anchor_nickname", "finderNickname"],
+                );
+                if let Some(name) = name {
+                    *found = Some(RoomInfo {
+                        name,
+                        title: first_text(
+                            object,
+                            &["liveTitle", "live_title", "topic", "title", "description", "desc"],
+                        ),
+                    });
+                }
+            }
+            mentions
+        }
+        _ => false,
+    }
+}
+
+fn extract_rooms(text: &str) -> Vec<(String, RoomInfo)> {
+    let ids: BTreeSet<&str> = live_id_regex().find_iter(text).map(|m| m.as_str()).take(20).collect();
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    let Ok(document) = serde_json::from_str::<Value>(text) else {
+        return Vec::new();
+    };
+    ids.into_iter()
+        .filter_map(|id| {
+            let mut found = None;
+            find_room(&document, id, &mut found);
+            found.map(|room| (id.to_string(), room))
+        })
+        .collect()
 }
 
 struct Shared {
@@ -139,10 +221,60 @@ impl Shared {
                 kind: kind.to_string(),
                 host: host.to_ascii_lowercase(),
                 seen_at_ms: chrono::Utc::now().timestamp_millis(),
+                room_name: None,
+                room_title: None,
             },
         );
         findings.candidates.truncate(MAX_CANDIDATES);
     }
+}
+
+/// Reads a JSON response for room details, then passes it on decoded with identical content.
+async fn inspect_json(shared: &Shared, endpoint: String, res: Response<Body>) -> Response<Body> {
+    const MAX_JSON_BYTES: u64 = 8 * 1024 * 1024;
+    use hudsucker::hyper::header::{CONTENT_ENCODING, CONTENT_LENGTH};
+    let too_large = res
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok()?.parse::<u64>().ok())
+        .is_some_and(|length| length > MAX_JSON_BYTES);
+    let known_encoding = res.headers().get(CONTENT_ENCODING).is_none_or(|value| {
+        matches!(
+            value.to_str().unwrap_or_default().to_ascii_lowercase().as_str(),
+            "gzip" | "x-gzip" | "deflate" | "br" | "zstd" | "identity"
+        )
+    });
+    if too_large || !known_encoding {
+        return res;
+    }
+    let Ok(res) = hudsucker::decode_response(res) else {
+        return Response::builder()
+            .status(502)
+            .body(Body::empty())
+            .expect("static response");
+    };
+    let (mut parts, body) = res.into_parts();
+    let Ok(collected) = body.collect().await else {
+        return Response::builder()
+            .status(502)
+            .body(Body::empty())
+            .expect("static response");
+    };
+    let bytes = collected.to_bytes();
+    parts.headers.remove(CONTENT_ENCODING);
+    parts.headers.insert(CONTENT_LENGTH, bytes.len().into());
+    {
+        let mut findings = shared.findings.lock().unwrap();
+        if findings.json_endpoints.len() < MAX_HOSTS {
+            findings.json_endpoints.insert(endpoint);
+        }
+        if let Ok(text) = std::str::from_utf8(&bytes) {
+            for (id, room) in extract_rooms(text) {
+                findings.rooms.insert(id, room);
+            }
+        }
+    }
+    Response::from_parts(parts, Body::from(bytes))
 }
 
 #[derive(Clone)]
@@ -175,6 +307,16 @@ impl HttpHandler for CaptureHandler {
                 .and_then(kind_from_content_type);
             if let (Some(kind), true) = (kind, res.status().is_success()) {
                 self.shared.note_stream(&url, &host, kind);
+            }
+            let is_json = res
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.to_ascii_lowercase().contains("json"));
+            if is_json && res.status().is_success() {
+                let path = url.split('?').next().unwrap_or(&url);
+                let endpoint = path.split("://").nth(1).unwrap_or(path).to_string();
+                return inspect_json(&self.shared, endpoint, res).await;
             }
         }
         res
@@ -584,6 +726,12 @@ impl WechatCapture {
         load_or_create_ca(&self.dir, &self.shared.suffixes)
     }
 
+    /// Previews only open URLs that this capture actually observed.
+    pub fn knows_stream(&self, url: &str) -> bool {
+        let findings = self.shared.findings.lock().unwrap();
+        findings.candidates.iter().any(|item| item.url == url)
+    }
+
     pub async fn status(&self) -> Result<CaptureStatus, String> {
         // Starting requires the certificate, so the store is only queried while idle.
         let capturing = self.running.lock().await.is_some();
@@ -612,8 +760,21 @@ impl WechatCapture {
                     .as_secs()
             }),
             replaced_existing_proxy: running.as_ref().is_some_and(|i| i.replaced_existing_proxy),
-            candidates: findings.candidates.clone(),
+            candidates: findings
+                .candidates
+                .iter()
+                .cloned()
+                .map(|mut candidate| {
+                    let room = live_id_of(&candidate.url).and_then(|id| findings.rooms.get(&id));
+                    if let Some(room) = room {
+                        candidate.room_name = Some(room.name.clone());
+                        candidate.room_title = room.title.clone();
+                    }
+                    candidate
+                })
+                .collect(),
             hosts: findings.hosts.iter().cloned().collect(),
+            json_endpoints: findings.json_endpoints.iter().cloned().collect(),
         })
     }
 
@@ -941,6 +1102,67 @@ mod tests {
         assert!(text.contains(&ca.serial_hex), "{text}");
     }
 
+    const GZIP_ROOM_JSON: &str = "H4sIAAAAAAAC/6tWSkksSVSyUqhWystMzs5LzE0FcpTSqzILdIvy83OVdBSUcjLLUkMyS3IQMiVgHlCquKQoNTEXJJ5RUlJQbKWvn5OfnJiTkV9cog/SFm8EA/EVemk5ZUq1tQBDTOD2cgAAAA==";
+
+    #[test]
+    fn room_details_come_only_from_objects_mentioning_the_stream() {
+        let rooms = extract_rooms(
+            r#"{"comments":[{"nickname":"viewer","text":"hi"}],
+                "object":{"nickname":"host","liveInfo":{"title":"topic-a"},
+                  "desc":"about","streams":[{"url":"https://a/live_123456789_x.flv?q=1"}]}}"#,
+        );
+        assert_eq!(
+            rooms,
+            vec![(
+                "live_123456789".to_string(),
+                RoomInfo {
+                    name: "host".into(),
+                    title: Some("about".into())
+                }
+            )]
+        );
+        // A response that does not mention a stream yields nothing, even with a nickname.
+        assert!(extract_rooms(r#"{"nickname":"viewer"}"#).is_empty());
+        assert!(extract_rooms("live_123456789 is not json").is_empty());
+    }
+
+    #[tokio::test]
+    async fn room_details_are_read_and_responses_still_reach_the_client() {
+        install_crypto_provider();
+        let fixture = fixture().await;
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::all(format!("http://{}", fixture.proxy_addr)).unwrap())
+            .add_root_certificate(
+                reqwest::Certificate::from_pem(fixture.ca.cert_pem.as_bytes()).unwrap(),
+            )
+            .build()
+            .unwrap();
+        let port = fixture.upstream_port;
+        let plain = client
+            .get(format!("https://localhost:{port}/api/room?x=1"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(plain.contains("plain-room"));
+        let unzipped = client
+            .get(format!("https://localhost:{port}/api/gz"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(unzipped.contains("gzip-room"), "{unzipped}");
+        let findings = fixture.shared.findings.lock().unwrap();
+        assert_eq!(findings.rooms["live_111111111"].name, "plain-room");
+        assert_eq!(findings.rooms["live_222222222"].name, "gzip-room");
+        assert_eq!(findings.rooms["live_222222222"].title.as_deref(), Some("gzip-title"));
+        assert!(findings.json_endpoints.iter().any(|e| e.ends_with("/api/room")));
+    }
+
     struct Fixture {
         proxy_addr: std::net::SocketAddr,
         upstream_port: u16,
@@ -961,14 +1183,30 @@ mod tests {
                     let mut buffer = [0; 4096];
                     let read = socket.read(&mut buffer).await.unwrap_or(0);
                     let request = String::from_utf8_lossy(&buffer[..read]).to_string();
-                    let content_type = if request.starts_with("GET /plain") {
-                        "text/html"
-                    } else {
-                        "video/x-flv"
-                    };
-                    let body = "FLVDATA";
-                    let response = format!("HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
-                    let _ = socket.write_all(response.as_bytes()).await;
+                    use base64::Engine;
+                    let (content_type, encoding, body): (&str, &str, Vec<u8>) =
+                        if request.starts_with("GET /plain") {
+                            ("text/html", "", b"FLVDATA".to_vec())
+                        } else if request.starts_with("GET /api/gz") {
+                            (
+                                "application/json",
+                                "Content-Encoding: gzip\r\n",
+                                base64::engine::general_purpose::STANDARD
+                                    .decode(GZIP_ROOM_JSON)
+                                    .unwrap(),
+                            )
+                        } else if request.starts_with("GET /api/room") {
+                            (
+                                "application/json; charset=utf-8",
+                                "",
+                                br#"{"comments":[{"nickname":"a-viewer"}],"live":{"nickname":"plain-room","title":"plain-title","url":"https://localhost/live_111111111_x.flv?sig=1"}}"#.to_vec(),
+                            )
+                        } else {
+                            ("video/x-flv", "", b"FLVDATA".to_vec())
+                        };
+                    let head = format!("HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\n{encoding}Content-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                    let _ = socket.write_all(head.as_bytes()).await;
+                    let _ = socket.write_all(&body).await;
                 });
             }
         });

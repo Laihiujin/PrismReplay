@@ -3350,6 +3350,7 @@ version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a1d7c1c828ff6db12ddafb16768ecbac920df6301778d0eb78e95da0e44d94b"
 dependencies = [
+ "async-compression",
  "bstr",
  "futures",
  "http 1.3.1",
@@ -3367,6 +3368,7 @@ dependencies = [
  "tokio-graceful",
  "tokio-rustls",
  "tokio-tungstenite 0.30.0",
+ "tokio-util",
  "tracing",
 ]
 
@@ -5812,6 +5814,7 @@ dependencies = [
  "deno_core",
  "env_logger",
  "fastrand",
+ "http-body-util",
  "hudsucker",
  "log",
  "m3u8-rs 6.0.0",
