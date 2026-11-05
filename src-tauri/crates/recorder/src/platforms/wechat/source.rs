@@ -144,9 +144,78 @@ impl WechatSource {
     }
 }
 
+/// A video-channel account the user tracks as a room. It holds no stream: the app checks the
+/// account's live status in WeChat and hands each new broadcast's stream to the recorder.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WechatAccount {
+    /// The `…@finder` id from the account's own profile page. Never a display name.
+    pub account_id: String,
+    /// The display name, which is also the WeChat tab name used to find the profile page.
+    pub name: String,
+}
+
+pub fn valid_account_id(value: &str) -> bool {
+    value.len() <= 256
+        && value.strip_suffix("@finder").is_some_and(|prefix| {
+            !prefix.is_empty()
+                && prefix
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+        })
+}
+
+impl WechatAccount {
+    /// Accepts only `{"account_id": "…@finder", "name": "…"}`; anything else is a stream source.
+    pub fn parse(input: &str) -> Option<Result<Self, String>> {
+        let value: Value = serde_json::from_str(input.trim()).ok()?;
+        let account_id = value.get("account_id")?;
+        Some((|| {
+            let account_id = account_id
+                .as_str()
+                .filter(|id| valid_account_id(id))
+                .ok_or("视频号账号 ID 无效，请重新绑定本人主页")?;
+            let name = value
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|name| {
+                    !name.is_empty() && name.chars().count() <= 80 && !name.chars().any(char::is_control)
+                })
+                .ok_or("请填写视频号完整显示名")?;
+            Ok(Self {
+                account_id: account_id.into(),
+                name: name.into(),
+            })
+        })())
+    }
+
+    /// Stable across broadcasts, unlike a stream's room ID.
+    pub fn room_id(&self) -> String {
+        format!("wxa_{:x}", md5::compute(&self.account_id))
+    }
+
+    pub fn to_extra(&self) -> Result<String, String> {
+        serde_json::to_string(self).map_err(|_| "无法保存视频号账号信息".into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tracked_account_has_a_stable_room_and_is_not_a_stream() {
+        let input = r#"{"account_id":"v2_abc@finder","name":" 新华网 "}"#;
+        let account = WechatAccount::parse(input).unwrap().unwrap();
+        assert_eq!(account.name, "新华网");
+        assert!(account.room_id().starts_with("wxa_"));
+        let saved = WechatAccount::parse(&account.to_extra().unwrap()).unwrap().unwrap();
+        assert_eq!(saved, account);
+        assert!(WechatAccount::parse(r#"{"account_id":"陈赫","name":"陈赫"}"#).unwrap().is_err());
+        assert!(WechatAccount::parse(r#"{"account_id":"v2_abc@finder"}"#).unwrap().is_err());
+        assert!(WechatAccount::parse(r#"{"url":"https://a.wxlivecdn.com/s.flv"}"#).is_none());
+        assert!(WechatAccount::parse("https://a.wxlivecdn.com/s.flv").is_none());
+    }
 
     #[test]
     fn signed_stream_url_is_preserved() {

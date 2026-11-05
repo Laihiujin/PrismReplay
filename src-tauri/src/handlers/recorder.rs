@@ -232,10 +232,18 @@ pub async fn add_recorder(
     }
     let mut room_id = room_id;
     if platform == PlatformType::Wechat {
+        use recorder::platforms::wechat::source::{WechatAccount, WechatSource};
         let input = if extra.trim().is_empty() { &room_id } else { &extra };
-        let source = recorder::platforms::wechat::source::WechatSource::parse(input)?;
-        room_id = source.room_id();
-        extra = source.to_extra()?;
+        if let Some(account) = WechatAccount::parse(input) {
+            // A tracked account: the room waits for the account to go live.
+            let account = account?;
+            room_id = account.room_id();
+            extra = account.to_extra()?;
+        } else {
+            let source = WechatSource::parse(input)?;
+            room_id = source.room_id();
+            extra = source.to_extra()?;
+        }
     }
     if platform == PlatformType::Kuaishou {
         let normalized = normalize_kuaishou_room_id(&room_id);
