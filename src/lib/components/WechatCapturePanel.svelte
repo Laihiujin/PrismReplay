@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher, onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { invoke } from "../invoker";
 
   interface Candidate {
@@ -21,7 +21,8 @@
     json_endpoints: string[];
   }
 
-  const dispatch = createEventDispatcher<{ select: string }>();
+  /** Adds the captured stream to the room list. Throws with a message when that fails. */
+  export let onAdd: (resource: string) => Promise<void>;
   let status: Status | null = null;
   let busy = false;
   let error = "";
@@ -31,29 +32,36 @@
   let previews: Record<string, string> = {};
   let typedNames: Record<string, string> = {};
 
-  interface Monitor {
-    running: boolean;
+  interface TrackedRoom {
+    room_id: string;
     host: string;
     account_id: string;
-    interval_mins: number;
+    live_state: string;
     message: string;
     last_check_ms: number;
     last_change_ms: number;
-    live_state: string;
-    auto_record: boolean;
+  }
+  interface Monitor {
+    interval_mins: number;
+    checking: string | null;
+    rooms: TrackedRoom[];
   }
   let monitor: Monitor | null = null;
   let monitorHost = "";
   let monitorAccountId = "";
   let monitorMinutes = 5;
-  let monitorAutoRecord = false;
   let monitorTimer: ReturnType<typeof setInterval> | null = null;
+  let trackAdding = false;
+  let trackMessage = "";
+  // The tracker drives captures on its own while it checks a room.
+  $: trackerBusy = !!monitor?.checking;
+  $: alreadyTracked = !!monitorAccountId && !!monitor?.rooms.some((room) => room.account_id === monitorAccountId);
 
   async function refreshMonitor() {
     try {
+      const first = monitor === null;
       monitor = (await invoke("wechat_monitor_status")) as Monitor;
-      if (monitor.host && !monitorHost) monitorHost = monitor.host;
-      if (monitor.account_id && !monitorAccountId && monitor.host === monitorHost) monitorAccountId = monitor.account_id;
+      if (first) monitorMinutes = monitor.interval_mins;
     } catch (e) {
       monitor = null;
     }
@@ -61,32 +69,53 @@
 
   async function bindMonitorProfile() {
     error = "";
+    trackMessage = "";
     try {
       const target = await invoke("wechat_monitor_bind", { host: monitorHost }) as { host: string; account_id: string };
       monitorHost = target.host;
       monitorAccountId = target.account_id;
     } catch (e) { error = String(e); }
-    await refreshMonitor();
   }
 
-  async function startMonitor() {
+  async function addTrackedRoom() {
     error = "";
+    trackAdding = true;
     try {
-      await invoke("wechat_monitor_start", { host: monitorHost, accountId: monitorAccountId, intervalMins: Number(monitorMinutes), autoRecord: monitorAutoRecord });
+      await onAdd(JSON.stringify({ account_id: monitorAccountId, name: monitorHost.trim() }));
+      trackMessage = `已把“${monitorHost.trim()}”加入直播间列表，开播后会自动录制`;
+      monitorHost = "";
+      monitorAccountId = "";
+      await invoke("wechat_monitor_check_now");
     } catch (e) {
       error = String(e);
     }
+    trackAdding = false;
     await refreshMonitor();
   }
 
-  async function stopMonitor() {
+  async function saveInterval() {
     try {
-      await invoke("wechat_monitor_stop");
+      monitorMinutes = (await invoke("wechat_monitor_set_interval", { intervalMins: Number(monitorMinutes) })) as number;
     } catch (e) {
       error = String(e);
     }
-    await refreshMonitor();
   }
+
+  async function checkNow() {
+    try {
+      await invoke("wechat_monitor_check_now");
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  const stateLabels: Record<string, string> = {
+    live: "直播中",
+    recording: "录制中",
+    offline: "未开播",
+    stopped: "已关闭",
+    unknown: "无法确认",
+  };
 
   function loadPreviews(candidates: Candidate[]) {
     for (const candidate of candidates) {
@@ -98,7 +127,9 @@
     }
   }
 
-  function streamLabel(candidate: Candidate) {
+  function streamLabel(candidate: Candidate, names: Record<string, string>) {
+    const note = (names[candidate.url] ?? "").trim();
+    if (note) return note;
     if (candidate.room_name) return candidate.room_name;
     const id = candidate.url.match(/live_(\d+)/);
     return id ? `直播 …${id[1].slice(-6)}` : candidate.host;
@@ -140,19 +171,82 @@
     await refresh();
   }
 
-  async function choose(candidate: Candidate) {
+  // Streams the user removed from the list, or already added, for this dialog.
+  let dismissed: Record<string, true> = {};
+  let added: Record<string, true> = {};
+  let adding: Record<string, boolean> = {};
+  $: visibleCandidates = (status?.candidates ?? []).filter((c) => !dismissed[c.url]);
+
+  // The stream shown large in the preview view, with a frame refreshed every few seconds.
+  let previewing: Candidate | null = null;
+  let previewFrame = "";
+  let previewError = "";
+  let previewTimer: ReturnType<typeof setTimeout> | null = null;
+  let previewToken = 0;
+
+  function openPreview(candidate: Candidate) {
+    previewing = candidate;
+    previewFrame = previews[candidate.url]?.startsWith("data:") ? previews[candidate.url] : "";
+    previewError = "";
+    const token = ++previewToken;
+    const tick = async () => {
+      try {
+        const image = (await invoke("wechat_capture_preview", { url: candidate.url })) as string;
+        if (token !== previewToken) return;
+        previewFrame = image;
+        previews[candidate.url] = image;
+        previewError = "";
+      } catch (e) {
+        if (token !== previewToken) return;
+        previewError = String(e);
+      }
+      if (token === previewToken) previewTimer = setTimeout(tick, 3000);
+    };
+    tick();
+  }
+
+  function closePreview() {
+    previewToken++;
+    if (previewTimer) clearTimeout(previewTimer);
+    previewTimer = null;
+    previewing = null;
+  }
+
+  function resourceFor(candidate: Candidate) {
     const name = (typedNames[candidate.url] ?? "").trim() || candidate.room_name || undefined;
-    await run("wechat_capture_stop");
-    dispatch(
-      "select",
-      JSON.stringify({
-        url: candidate.url,
-        title: candidate.room_title || name || "视频号直播",
-        name,
-        cover: previews[candidate.url]?.startsWith("data:") ? previews[candidate.url] : undefined,
-        captured_stream: true,
-      }),
-    );
+    return JSON.stringify({
+      url: candidate.url,
+      title: candidate.room_title || name || "视频号直播",
+      name,
+      cover: previews[candidate.url]?.startsWith("data:") ? previews[candidate.url] : undefined,
+      captured_stream: true,
+    });
+  }
+
+  async function addToHome(candidate: Candidate) {
+    error = "";
+    adding[candidate.url] = true;
+    try {
+      // Keep capturing only while the user may still add more streams; the
+      // system proxy is restored once nothing is left to pick from.
+      const others = visibleCandidates.filter((c) => c.url !== candidate.url && !added[c.url]);
+      if (others.length === 0 && status?.running && !trackerBusy) await run("wechat_capture_stop");
+      await onAdd(resourceFor(candidate));
+      added[candidate.url] = true;
+      if (previewing?.url === candidate.url) closePreview();
+    } catch (e) {
+      error = String(e);
+    }
+    adding[candidate.url] = false;
+  }
+
+  function dismiss(candidate: Candidate) {
+    dismissed[candidate.url] = true;
+    if (previewing?.url === candidate.url) closePreview();
+  }
+
+  function seenAt(candidate: Candidate) {
+    return candidate.seen_at_ms ? new Date(candidate.seen_at_ms).toLocaleTimeString() : "";
   }
 
   function clock(seconds: number) {
@@ -164,22 +258,26 @@
     refreshMonitor();
     monitorTimer = setInterval(() => {
       refreshMonitor();
-      // Monitoring starts captures on its own, so keep the capture state in view.
-      if (monitor?.running) refresh();
+      // The tracker starts captures on its own, so keep the capture state in view.
+      if (trackerBusy) refresh();
     }, 3000);
   });
   onDestroy(() => {
     if (timer) clearInterval(timer);
     if (monitorTimer) clearInterval(monitorTimer);
+    closePreview();
     // Leaving this dialog must never leave the system proxy pointing at us.
-    // Monitoring keeps running in the background and manages its own capture.
-    if (status?.running && !monitor?.running) invoke("wechat_capture_stop").catch(() => {});
+    // The tracker keeps running in the background and manages its own capture.
+    if (status?.running && !trackerBusy) invoke("wechat_capture_stop").catch(() => {});
   });
 </script>
 
 {#if status?.supported}
   <div class="rounded-lg bg-[#f5f5f7] dark:bg-[#1c1c1e] p-3 space-y-2 text-sm text-gray-700 dark:text-gray-300">
-    <div class="font-medium text-gray-900 dark:text-white">自动抓取直播地址</div>
+   <details class="group space-y-2" open>
+    <summary class="cursor-pointer select-none font-medium text-gray-900 dark:text-white">
+      自动抓取直播地址{#if visibleCandidates.length > 0}<span class="ml-1 text-xs font-normal text-gray-500">（{visibleCandidates.length} 个）</span>{/if}
+    </summary>
 
     {#if !status.ca_installed}
       <p class="text-xs">
@@ -220,35 +318,81 @@
         on:click={() => run("wechat_capture_stop")}>停止抓取</button>
     {/if}
 
-    {#if status.candidates.length > 0}
-      <ul class="space-y-1 max-h-72 overflow-y-auto">
-        {#each status.candidates as candidate (candidate.url)}
+    {#if previewing}
+      <div class="space-y-2 rounded-md bg-white dark:bg-[#2c2c2e] p-2">
+        <div class="flex items-center gap-2">
+          <button class="px-2 py-1 text-xs rounded-md bg-gray-200 dark:bg-gray-700" on:click={closePreview}>← 返回</button>
+          <div class="min-w-0 flex-1 truncate font-medium text-gray-900 dark:text-white" title={streamLabel(previewing, typedNames)}>{streamLabel(previewing, typedNames)}</div>
+        </div>
+        <div class="w-full aspect-video rounded bg-black flex items-center justify-center overflow-hidden">
+          {#if previewFrame}
+            <img src={previewFrame} alt="直播画面" class="w-full h-full object-contain" />
+          {:else}
+            <span class="text-xs text-gray-400">{previewError || "正在读取画面…"}</span>
+          {/if}
+        </div>
+        {#if previewFrame && previewError}
+          <p class="text-xs text-amber-600 dark:text-amber-400">画面暂停更新：{previewError}</p>
+        {:else}
+          <p class="text-xs text-gray-500 dark:text-gray-400">画面每 3 秒刷新一次，无声音。</p>
+        {/if}
+        <div class="text-xs space-y-0.5">
+          {#if previewing.room_title}<div class="break-all">标题：{previewing.room_title}</div>{/if}
+          <div class="text-gray-500 dark:text-gray-400 break-all">
+            {previewing.kind.toUpperCase()}{quality(previewing)} · {previewing.host}{seenAt(previewing) ? ` · 抓到于 ${seenAt(previewing)}` : ""}
+          </div>
+        </div>
+        <input
+          class="w-full rounded bg-[#f5f5f7] dark:bg-[#1c1c1e] px-2 py-1 text-xs text-gray-900 dark:text-white placeholder-gray-500"
+          placeholder={previewing.room_name ? `备注：${previewing.room_name}` : "备注（作为直播间名字显示）"}
+          bind:value={typedNames[previewing.url]}
+        />
+        <div class="flex gap-2">
+          <button class="flex-1 px-3 py-1.5 text-xs rounded-md bg-blue-600 text-white disabled:opacity-50"
+            disabled={busy || adding[previewing.url] || added[previewing.url]}
+            on:click={() => previewing && addToHome(previewing)}>
+            {added[previewing.url] ? "已添加" : adding[previewing.url] ? "添加中…" : "增加此直播间到主页"}
+          </button>
+          <button class="px-3 py-1.5 text-xs rounded-md bg-gray-200 dark:bg-gray-700" on:click={closePreview}>返回</button>
+        </div>
+      </div>
+    {:else if visibleCandidates.length > 0}
+      <ul class="space-y-1">
+        {#each visibleCandidates as candidate (candidate.url)}
           <li class="flex items-center gap-2 rounded-md bg-white dark:bg-[#2c2c2e] p-2">
-            <div class="shrink-0 w-14 h-24 rounded bg-black/20 flex items-center justify-center overflow-hidden">
+            <button class="shrink-0 w-14 h-24 rounded bg-black/20 flex items-center justify-center overflow-hidden" title="预览"
+              on:click={() => openPreview(candidate)}>
               {#if previews[candidate.url] && previews[candidate.url] !== "failed"}
                 <img src={previews[candidate.url]} alt="直播画面" class="w-full h-full object-cover" />
               {:else}
                 <span class="text-[10px] text-gray-500">{previews[candidate.url] === "failed" ? "无画面" : "加载中"}</span>
               {/if}
-            </div>
+            </button>
             <div class="min-w-0 flex-1 text-xs">
-              <div class="truncate font-medium text-gray-900 dark:text-white" title={streamLabel(candidate)}>{streamLabel(candidate)}</div>
+              <div class="truncate font-medium text-gray-900 dark:text-white" title={streamLabel(candidate, typedNames)}>{streamLabel(candidate, typedNames)}</div>
               {#if candidate.room_title}
                 <div class="truncate" title={candidate.room_title}>{candidate.room_title}</div>
               {/if}
               <div class="truncate text-gray-500 dark:text-gray-400" title={candidate.host}>{candidate.kind.toUpperCase()}{quality(candidate)} · {candidate.host}</div>
               <input
                 class="mt-1 w-full rounded bg-[#f5f5f7] dark:bg-[#1c1c1e] px-1.5 py-0.5 text-xs text-gray-900 dark:text-white placeholder-gray-500"
-                placeholder={candidate.room_name ? `名字：${candidate.room_name}` : "直播间名字（可选）"}
+                placeholder={candidate.room_name ? `备注：${candidate.room_name}` : "备注（作为直播间名字显示）"}
                 bind:value={typedNames[candidate.url]}
               />
             </div>
-            <button class="shrink-0 px-2 py-1 text-xs rounded-md bg-blue-600 text-white disabled:opacity-50" disabled={busy}
-              on:click={() => choose(candidate)}>使用这个</button>
+            <div class="shrink-0 flex flex-col gap-1">
+              <button class="px-2 py-1 text-xs rounded-md bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white"
+                on:click={() => openPreview(candidate)}>预览</button>
+              <button class="px-2 py-1 text-xs rounded-md bg-blue-600 text-white disabled:opacity-50"
+                disabled={busy || adding[candidate.url] || added[candidate.url]}
+                on:click={() => addToHome(candidate)}>{added[candidate.url] ? "已添加" : adding[candidate.url] ? "添加中" : "添加"}</button>
+              <button class="px-2 py-1 text-xs rounded-md text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+                on:click={() => dismiss(candidate)}>删除</button>
+            </div>
           </li>
         {/each}
       </ul>
-      {#if status.candidates.some((candidate) => !candidate.room_name) && status.json_endpoints.length > 0}
+      {#if !previewing && visibleCandidates.some((candidate) => !candidate.room_name) && status.json_endpoints.length > 0}
         <details class="text-xs text-gray-500 dark:text-gray-400">
           <summary class="cursor-pointer">没有名字？已读取的接口（{status.json_endpoints.length}）</summary>
           <p class="mt-1 break-all">{status.json_endpoints.join("  ")}</p>
@@ -256,36 +400,57 @@
       {/if}
     {/if}
 
-      <div class="border-t border-gray-200 dark:border-gray-700 pt-2 space-y-1.5 text-xs">
-        <div class="font-medium text-gray-900 dark:text-white">跟踪指定视频号</div>
+   </details>
+
+      <details class="border-t border-gray-200 dark:border-gray-700 pt-2 space-y-1.5 text-xs" open>
+        <summary class="cursor-pointer select-none font-medium text-gray-900 dark:text-white">
+          跟踪视频号账号{#if monitor?.rooms.length}<span class="ml-1 font-normal text-gray-500">（{monitor.rooms.length} 个）</span>{/if}
+        </summary>
         <p>
-          先在电脑版微信打开本人视频号主页（不是搜索结果），填写显示名并点“绑定当前主页”。绑定后按主页账号 ID 检查状态，同名账号不会替代它。默认只监控，不抓包、不改系统代理；微信需保持主页可读，读取失败时显示“无法确认”。
+          把一个视频号账号加进直播间列表：它开播时自动进直播间抓流并录制，每场直播都会录。先在电脑版微信打开本人视频号主页（不是搜索结果），填写显示名并点“绑定当前主页”，再点“加入直播间列表”。之后请让每个账号的主页各自保持一个标签页开着。
         </p>
         <div class="flex items-center gap-2">
           <input class="min-w-0 flex-1 rounded bg-white dark:bg-[#2c2c2e] px-2 py-1 text-gray-900 dark:text-white"
-            placeholder="本人主页显示名，如 陈赫" bind:value={monitorHost} on:input={() => monitorAccountId = ""} disabled={monitor?.running} />
-          <button class="shrink-0 px-2 py-1 rounded-md bg-gray-200 dark:bg-gray-700 disabled:opacity-50" disabled={monitor?.running || !monitorHost.trim()} on:click={bindMonitorProfile}>绑定当前主页</button>
+            placeholder="本人主页显示名，如 陈赫" bind:value={monitorHost} on:input={() => { monitorAccountId = ""; trackMessage = ""; }} />
+          <button class="shrink-0 px-2 py-1 rounded-md bg-gray-200 dark:bg-gray-700 disabled:opacity-50" disabled={!monitorHost.trim()} on:click={bindMonitorProfile}>绑定当前主页</button>
+          <button class="shrink-0 px-3 py-1 rounded-md bg-blue-600 text-white disabled:opacity-50"
+            disabled={!monitorHost.trim() || !monitorAccountId || trackAdding || alreadyTracked}
+            on:click={addTrackedRoom}>{alreadyTracked ? "已在列表中" : trackAdding ? "添加中…" : "加入直播间列表"}</button>
+        </div>
+        {#if monitorAccountId}<p class="text-gray-500 dark:text-gray-400 break-all">已绑定账号：{monitorAccountId.slice(0, 12)}…{monitorAccountId.slice(-12)}</p>{/if}
+        {#if trackMessage}<p class="text-green-600 dark:text-green-400">{trackMessage}</p>{/if}
+        {#if !status.ca_installed}
+          <p class="text-amber-600 dark:text-amber-400">还没安装抓取证书：只能看到是否开播，不能自动录制。</p>
+        {/if}
+        <div class="flex items-center gap-2">
+          <span>每个账号每</span>
           <input class="w-14 rounded bg-white dark:bg-[#2c2c2e] px-2 py-1 text-gray-900 dark:text-white"
-            type="number" min="5" title="检查间隔（分钟），最少 5 分钟" bind:value={monitorMinutes} disabled={monitor?.running} />
-          <span>分钟</span>
-          {#if monitor?.running}
-            <button class="shrink-0 px-3 py-1 rounded-md text-gray-600 dark:text-gray-400 hover:underline" on:click={stopMonitor}>停止监控</button>
-          {:else}
-            <button class="shrink-0 px-3 py-1 rounded-md bg-blue-600 text-white disabled:opacity-50" disabled={!monitorHost.trim() || !monitorAccountId} on:click={startMonitor}>开始监控</button>
+            type="number" min="5" title="检查间隔（分钟），最少 5 分钟" bind:value={monitorMinutes} on:change={saveInterval} />
+          <span>分钟检查一次</span>
+          {#if monitor?.rooms.length}
+            <button class="ml-auto px-2 py-1 rounded-md text-gray-600 dark:text-gray-400 hover:underline" on:click={checkNow}>立即检查</button>
           {/if}
         </div>
-        <label class="flex items-center gap-2">
-          <input type="checkbox" bind:checked={monitorAutoRecord} disabled={monitor?.running || !status.ca_installed} />
-          开播后自动抓流录制（可选，需您先安装抓取证书）
-        </label>
-        <p class="text-gray-500 dark:text-gray-400">每次读取都核对已绑定的 @finder 账号标识，显示名只作为导航提示。不会保存主页里的登录票据或完整带签名地址。检查至少间隔 5 分钟。</p>
-        {#if monitorAccountId}<p class="text-gray-500 dark:text-gray-400 break-all">已绑定账号：{monitorAccountId.slice(0, 12)}…{monitorAccountId.slice(-12)}</p>{/if}
-        {#if monitor?.message}
-          <p class="text-gray-500 dark:text-gray-400">
-            {monitor.host}：{monitor.message}{monitor.last_check_ms ? `（${new Date(monitor.last_check_ms).toLocaleTimeString()}）` : ""}
-          </p>
+        {#if monitor?.rooms.length}
+          <ul class="space-y-1">
+            {#each monitor.rooms as room (room.room_id)}
+              <li class="rounded-md bg-white dark:bg-[#2c2c2e] px-2 py-1">
+                <div class="flex items-center gap-2">
+                  <span class="min-w-0 flex-1 truncate font-medium text-gray-900 dark:text-white">{room.host}</span>
+                  <span class={room.live_state === "live" || room.live_state === "recording" ? "text-red-600 dark:text-red-400" : "text-gray-500 dark:text-gray-400"}>
+                    {monitor.checking === room.room_id ? "检查中…" : stateLabels[room.live_state] ?? room.live_state}
+                  </span>
+                </div>
+                <div class="text-gray-500 dark:text-gray-400">
+                  {room.message}{room.last_check_ms ? `（${new Date(room.last_check_ms).toLocaleTimeString()}）` : ""}
+                </div>
+              </li>
+            {/each}
+          </ul>
+          <p class="text-gray-500 dark:text-gray-400">在直播间列表里关闭某个账号就不再检查它，删除它就停止跟踪。</p>
         {/if}
-      </div>
+        <p class="text-gray-500 dark:text-gray-400">每次读取都核对 @finder 账号标识，显示名只用来找到主页标签页。不会保存主页里的登录票据或带签名地址。</p>
+      </details>
 
     {#if error}
       <p class="text-xs text-red-600 dark:text-red-500">{error}</p>

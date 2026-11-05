@@ -23,6 +23,7 @@ use recorder::platforms::huya::HuyaRecorder;
 use recorder::platforms::kuaishou::KuaishouRecorder;
 use recorder::platforms::tiktok::TikTokRecorder;
 use recorder::platforms::weibo::WeiboRecorder;
+use recorder::platforms::wechat::source::{WechatAccount, WechatSource};
 use recorder::platforms::wechat::WechatRecorder;
 use recorder::platforms::xiaohongshu::XiaohongshuRecorder;
 use recorder::platforms::PlatformType;
@@ -76,6 +77,15 @@ pub struct RelatedPlaylist {
     pub live_id: String,
     pub title: String,
     pub path: PathBuf,
+}
+
+/// A room that tracks a video-channel account.
+#[derive(Clone, Debug)]
+pub struct WechatTrackedRoom {
+    pub room_id: String,
+    pub account: WechatAccount,
+    pub enabled: bool,
+    pub recording: bool,
 }
 
 pub enum RecorderType {
@@ -1815,6 +1825,44 @@ impl RecorderManager {
             Some(room_info)
         } else {
             None
+        }
+    }
+
+    /// Rooms that track a video-channel account, with whether each is on and recording.
+    pub async fn wechat_tracked_rooms(&self) -> Vec<WechatTrackedRoom> {
+        let mut rooms = Vec::new();
+        for recorder in self.recorders.read().await.values() {
+            let RecorderType::Wechat(recorder) = recorder else {
+                continue;
+            };
+            let Some(account) = recorder.tracked_account().cloned() else {
+                continue;
+            };
+            let info = recorder.info().await;
+            rooms.push(WechatTrackedRoom {
+                room_id: info.room_info.room_id,
+                account,
+                enabled: info.enabled,
+                recording: info.recording,
+            });
+        }
+        rooms.sort_by(|a, b| a.room_id.cmp(&b.room_id));
+        rooms
+    }
+
+    /// Hands a tracked video-channel room the stream of its new broadcast.
+    pub async fn offer_wechat_stream(&self, room_id: &str, source: WechatSource) -> bool {
+        let recorder_id = format!("{}:{}", PlatformType::Wechat.as_str(), room_id);
+        match self.recorders.read().await.get(&recorder_id) {
+            Some(RecorderType::Wechat(recorder)) => recorder.offer_stream(source).await,
+            _ => false,
+        }
+    }
+
+    pub async fn set_wechat_live(&self, room_id: &str, live: bool) {
+        let recorder_id = format!("{}:{}", PlatformType::Wechat.as_str(), room_id);
+        if let Some(RecorderType::Wechat(recorder)) = self.recorders.read().await.get(&recorder_id) {
+            recorder.set_live(live).await;
         }
     }
 

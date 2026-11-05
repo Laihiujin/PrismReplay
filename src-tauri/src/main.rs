@@ -890,8 +890,8 @@ fn setup_invoke_handlers(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         crate::handlers::wechat_capture::wechat_capture_preview,
         crate::handlers::wechat_monitor::wechat_monitor_status,
         crate::handlers::wechat_monitor::wechat_monitor_bind,
-        crate::handlers::wechat_monitor::wechat_monitor_start,
-        crate::handlers::wechat_monitor::wechat_monitor_stop,
+        crate::handlers::wechat_monitor::wechat_monitor_set_interval,
+        crate::handlers::wechat_monitor::wechat_monitor_check_now,
         crate::handlers::recorder::remove_recorder,
         crate::handlers::recorder::reload_recorder,
         crate::handlers::recorder::get_room_info,
@@ -1000,6 +1000,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 app.manage(state.clone());
+                crate::handlers::wechat_monitor::start_tracker(app.handle());
 
                 if state.config.read().await.use_guest_accounts {
                     let guest_empty_or_blank = {
