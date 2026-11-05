@@ -202,6 +202,12 @@ foreach ($process in Get-Process Weixin -ErrorAction Stop) {
         .find_map(host_from_document_name)
 }
 
+/// Reading WeChat's window needs Windows UI Automation; elsewhere the user names the room by hand.
+#[cfg(not(windows))]
+fn visible_room_host() -> Option<String> {
+    None
+}
+
 fn extract_rooms(text: &str) -> Vec<(String, RoomInfo)> {
     let ids: BTreeSet<&str> = live_id_regex().find_iter(text).map(|m| m.as_str()).take(20).collect();
     if ids.is_empty() {
@@ -529,6 +535,51 @@ fn trust_store_contains(_serial_hex: &str) -> bool {
     false
 }
 
+/// macOS keeps trust per certificate in the user's keychain. `verify-cert` succeeds only when the
+/// certificate is a trusted root, which is what the capture needs.
+#[cfg(target_os = "macos")]
+fn is_trusted(dir: &Path, _serial_hex: &str) -> bool {
+    let cert = dir.join("ca.crt");
+    cert.exists()
+        && std::process::Command::new("security")
+            .args(["verify-cert", "-c"])
+            .arg(&cert)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_trusted(_dir: &Path, serial_hex: &str) -> bool {
+    trust_store_contains(serial_hex)
+}
+
+#[cfg(target_os = "macos")]
+fn login_keychain() -> Result<PathBuf, String> {
+    std::env::var_os("HOME")
+        .map(|home| PathBuf::from(home).join("Library/Keychains/login.keychain-db"))
+        .ok_or_else(|| "无法确定登录钥匙串位置".to_string())
+}
+
+/// Removes every certificate with our name, which also covers replaced and retired ones.
+#[cfg(target_os = "macos")]
+fn delete_our_certificates(keychain: &Path) -> bool {
+    let mut removed_any = false;
+    for _ in 0..8 {
+        let removed = std::process::Command::new("security")
+            .args(["delete-certificate", "-t", "-c", CA_COMMON_NAME])
+            .arg(keychain)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        if !removed {
+            break;
+        }
+        removed_any = true;
+    }
+    removed_any
+}
+
 // --- system proxy ------------------------------------------------------------------------------
 
 const PROXY_FLAG_DIRECT: u32 = 0x1;
@@ -742,21 +793,129 @@ impl ProxyStore for SystemProxyStore {
     }
 }
 
+/// Drives `networksetup` on the network service that is actually in use. The service's web and
+/// secure-web proxies are one setting to the user, so they are read and written together.
+#[cfg(target_os = "macos")]
+pub struct SystemProxyStore;
+
+#[cfg(target_os = "macos")]
+fn networksetup(args: &[&str]) -> Result<String, String> {
+    let output = std::process::Command::new("networksetup")
+        .args(args)
+        .output()
+        .map_err(|e| format!("无法运行 networksetup：{e}"))?;
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    if output.status.success() && !text.contains("** Error") {
+        Ok(text)
+    } else {
+        Err(format!(
+            "networksetup 失败：{}{}",
+            text.trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn active_network_service() -> Result<String, String> {
+    let list = networksetup(&["-listallnetworkservices"])?;
+    for service in list.lines().skip(1).filter(|line| !line.starts_with('*')) {
+        let Ok(info) = networksetup(&["-getinfo", service]) else {
+            continue;
+        };
+        let has_ip = info.lines().any(|line| {
+            line.strip_prefix("IP address:")
+                .is_some_and(|value| value.trim().chars().next().is_some_and(|c| c.is_ascii_digit()))
+        });
+        if has_ip {
+            return Ok(service.to_string());
+        }
+    }
+    Err("找不到正在使用的网络连接，无法读取系统代理".into())
+}
+
+#[cfg(target_os = "macos")]
+fn field<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+    text.lines()
+        .find_map(|line| line.strip_prefix(name)?.strip_prefix(':'))
+        .map(str::trim)
+}
+
+#[cfg(target_os = "macos")]
+impl ProxyStore for SystemProxyStore {
+    fn read(&self) -> Result<ProxySnapshot, String> {
+        let service = active_network_service()?;
+        let web = networksetup(&["-getwebproxy", &service])?;
+        let secure = networksetup(&["-getsecurewebproxy", &service])?;
+        let auto = networksetup(&["-getautoproxyurl", &service])?;
+        let on = |text: &str| field(text, "Enabled") == Some("Yes");
+        let enabled = on(&web) || on(&secure);
+        let source = if on(&web) { &web } else { &secure };
+        let server = field(source, "Server")
+            .filter(|host| !host.is_empty())
+            .zip(field(source, "Port"))
+            .map(|(host, port)| format!("{host}:{port}"));
+        let bypass = networksetup(&["-getproxybypassdomains", &service])
+            .ok()
+            .map(|text| text.lines().map(str::trim).collect::<Vec<_>>().join(" "))
+            .filter(|text| !text.is_empty() && !text.contains("any"));
+        let mut flags = PROXY_FLAG_DIRECT;
+        if enabled {
+            flags |= PROXY_FLAG_PROXY;
+        }
+        let auto_config_url = field(&auto, "URL").filter(|url| *url != "(null)").map(String::from);
+        if on(&auto) {
+            flags |= PROXY_FLAG_AUTO_URL;
+        }
+        Ok(ProxySnapshot {
+            flags,
+            server: server.filter(|_| enabled),
+            bypass,
+            auto_config_url,
+        })
+    }
+
+    fn write(&self, snapshot: &ProxySnapshot) -> Result<(), String> {
+        let service = active_network_service()?;
+        if let Some(bypass) = snapshot.bypass.as_deref() {
+            let mut args = vec!["-setproxybypassdomains", service.as_str()];
+            args.extend(bypass.split_whitespace());
+            networksetup(&args)?;
+        }
+        match snapshot.server.as_deref().filter(|_| snapshot.enabled()) {
+            Some(server) => {
+                let (host, port) = server
+                    .rsplit_once(':')
+                    .ok_or_else(|| format!("代理地址格式不对：{server}"))?;
+                networksetup(&["-setwebproxy", &service, host, port])?;
+                networksetup(&["-setsecurewebproxy", &service, host, port])?;
+                networksetup(&["-setwebproxystate", &service, "on"])?;
+                networksetup(&["-setsecurewebproxystate", &service, "on"])?;
+            }
+            None => {
+                networksetup(&["-setwebproxystate", &service, "off"])?;
+                networksetup(&["-setsecurewebproxystate", &service, "off"])?;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Run at startup: repairs the proxy if the previous run ended while capturing.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub fn recover_after_crash(dir: &Path) {
     if let Err(error) = restore_proxy(&SystemProxyStore, dir) {
         log::warn!("Failed to restore the system proxy after a previous capture: {error}");
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn recover_after_crash(_dir: &Path) {}
 
 // --- service -----------------------------------------------------------------------------------
 
-#[cfg(not(windows))]
-const WINDOWS_ONLY: &str = "视频号自动抓取目前只支持 Windows";
+#[cfg(not(any(windows, target_os = "macos")))]
+const WINDOWS_ONLY: &str = "视频号自动抓取目前只支持 Windows 和 macOS";
 
 struct AbortOnDrop(JoinHandle<()>);
 
@@ -809,7 +968,7 @@ impl WechatCapture {
                 let meta = std::fs::read_to_string(dir.join("ca.json")).ok()?;
                 let meta: CaMeta = serde_json::from_str(&meta).ok()?;
                 let current = meta.suffixes == suffixes;
-                Some(current && trust_store_contains(&meta.serial_hex))
+                Some(current && is_trusted(&dir, &meta.serial_hex))
             })
             .await
             .map_err(|e| e.to_string())?
@@ -817,7 +976,7 @@ impl WechatCapture {
         let running = self.running.lock().await;
         let findings = self.shared.findings.lock().unwrap();
         Ok(CaptureStatus {
-            supported: cfg!(windows),
+            supported: cfg!(any(windows, target_os = "macos")),
             ca_installed,
             running: running.is_some(),
             port: running.as_ref().map(|item| item.port),
@@ -843,6 +1002,45 @@ impl WechatCapture {
             hosts: findings.hosts.iter().cloned().collect(),
             json_endpoints: findings.json_endpoints.iter().cloned().collect(),
         })
+    }
+
+    /// macOS asks for the user's password (or Touch ID) itself; nothing is trusted unless they accept.
+    #[cfg(target_os = "macos")]
+    pub async fn install_ca(&self) -> Result<(), String> {
+        self.ca()?;
+        let cert = self.dir.join("ca.crt");
+        let keychain = login_keychain()?;
+        let output = tokio::task::spawn_blocking(move || {
+            // A replaced certificate must not stay trusted next to the new one.
+            delete_our_certificates(&keychain);
+            std::process::Command::new("security")
+                .args(["add-trusted-cert", "-r", "trustRoot", "-k"])
+                .arg(&keychain)
+                .arg(&cert)
+                .output()
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("无法运行 security：{e}"))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err("证书没有安装。如果你在 macOS 的授权窗口里取消了，可以重新点安装。".into())
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub async fn remove_ca(&self) -> Result<(), String> {
+        self.stop().await?;
+        let keychain = login_keychain()?;
+        let removed = tokio::task::spawn_blocking(move || delete_our_certificates(&keychain))
+            .await
+            .map_err(|e| e.to_string())?;
+        if removed || !is_trusted(&self.dir, "") {
+            Ok(())
+        } else {
+            Err("证书没有移除，可以在“钥匙串访问”里手动删除名为抓取证书的条目。".into())
+        }
     }
 
     /// Windows shows its own confirmation dialog; nothing is trusted unless the user accepts it.
@@ -910,14 +1108,14 @@ impl WechatCapture {
         }
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     pub async fn start(self: &Arc<Self>) -> Result<(), String> {
         let mut running = self.running.lock().await;
         if running.is_some() {
             return Ok(());
         }
         let ca = self.ca()?;
-        if !trust_store_contains(&ca.serial_hex) {
+        if !is_trusted(&self.dir, &ca.serial_hex) {
             return Err("请先安装抓取证书".into());
         }
         let listener = TcpListener::bind(("127.0.0.1", 0))
@@ -987,17 +1185,17 @@ impl WechatCapture {
         Ok(())
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     pub async fn install_ca(&self) -> Result<(), String> {
         Err(WINDOWS_ONLY.into())
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     pub async fn remove_ca(&self) -> Result<(), String> {
         Err(WINDOWS_ONLY.into())
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     pub async fn start(self: &Arc<Self>) -> Result<(), String> {
         Err(WINDOWS_ONLY.into())
     }
@@ -1007,9 +1205,9 @@ impl WechatCapture {
             return Ok(());
         };
         // Restore first: a stopped proxy with the setting still in place would cut off the network.
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         let restored = restore_proxy(&SystemProxyStore, &self.dir);
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "macos")))]
         let restored: Result<(), String> = Ok(());
         let _ = running.shutdown.send(());
         running.watchdog.abort();
@@ -1155,6 +1353,15 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn reads_the_real_proxy_settings() {
+        let snapshot = SystemProxyStore.read().unwrap();
+        println!("flags={:#x} server={:?}", snapshot.flags, snapshot.server);
+        assert_ne!(snapshot.flags, 0);
+    }
+
+    /// Read-only: checks the `networksetup` query path against the real settings.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn reads_the_real_macos_proxy_settings() {
         let snapshot = SystemProxyStore.read().unwrap();
         println!("flags={:#x} server={:?}", snapshot.flags, snapshot.server);
         assert_ne!(snapshot.flags, 0);
