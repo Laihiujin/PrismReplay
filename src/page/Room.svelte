@@ -918,6 +918,12 @@
       });
   }
 
+  // Adds one stream picked in the WeChat capture list and keeps the dialog
+  // open, because one capture often finds several rooms.
+  async function addCapturedWechat(resource: string) {
+    await invoke("add_recorder", { roomId: resource, platform: "wechat", extra: "" });
+  }
+
   async function addBatchRecorders() {
     if (batchEntries.length === 0) {
       await message("没有可添加的直播间");
@@ -1419,21 +1425,21 @@
 
 {#if addModal}
   <div
-    class="fixed inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center"
+    class="fixed inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
     transition:fade={{ duration: 200 }}
   >
     <div
-      class="mac-modal add-modal w-[400px] bg-white dark:bg-[#323234] rounded-xl shadow-xl overflow-hidden"
+      class="mac-modal add-modal w-[400px] max-h-full flex flex-col bg-white dark:bg-[#323234] rounded-xl shadow-xl overflow-hidden"
       transition:scale={{ duration: 150, start: 0.95 }}
     >
       <!-- Header -->
-      <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-700/50">
+      <div class="shrink-0 px-6 py-4 border-b border-gray-200 dark:border-gray-700/50">
         <h2 class="text-base font-medium text-gray-900 dark:text-white">
           添加直播间
         </h2>
       </div>
 
-      <div class="p-6 space-y-6">
+      <div class="flex-1 min-h-0 overflow-y-auto custom-scrollbar-light p-6">
         <div class="space-y-4">
           <div class="space-y-2">
             <div
@@ -1546,12 +1552,15 @@
                   : "直播间ID"}
             </label>
             {#if selectedPlatform === "wechat"}
-              <WechatCapturePanel on:select={(event) => (addRoom = event.detail)} />
-              <textarea
-                id="room_id" rows="5" bind:value={addRoom}
-                class="w-full px-3 py-2 bg-[#f5f5f7] dark:bg-[#1c1c1e] border-0 rounded-lg focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-white"
-                placeholder="点上方自动抓取后这里会自动填入；也可以粘贴 m3u8 / flv / mp4 直链或单条资源 JSON"
-              ></textarea>
+              <WechatCapturePanel onAdd={addCapturedWechat} />
+              <details class="text-sm" open={addRoom.trim().length > 0}>
+                <summary class="cursor-pointer text-xs text-gray-600 dark:text-gray-400">手动粘贴直链或资源 JSON</summary>
+                <textarea
+                  id="room_id" rows="2" bind:value={addRoom}
+                  class="mt-2 w-full max-h-24 px-3 py-2 text-xs break-all bg-[#f5f5f7] dark:bg-[#1c1c1e] border-0 rounded-lg focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-white"
+                  placeholder="粘贴 m3u8 / flv / mp4 直链或单条资源 JSON"
+                ></textarea>
+              </details>
               <p class="text-xs text-gray-500 dark:text-gray-400">
                 请只录制您有权保存的内容。也兼容 wechatVideoDownload 的复制链接和 res-downloader 的资源 JSON。不支持分享页直解、加密短视频或弹幕。流结束或失败后自动停止，链接过期后需要重新抓取。
               </p>
@@ -1592,35 +1601,37 @@
             {/if}
           </div>
 
-          <div class="flex justify-end space-x-3">
-            <button
-              class="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 rounded-lg transition-colors"
-              on:click={() => {
-                addModal = false;
-              }}
-            >
-              取消
-            </button>
-            <button
-              class="px-4 py-2 bg-[#0A84FF] hover:bg-[#0A84FF]/90 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={!addValid}
-              on:click={() => {
-                if (batchMode) {
-                  addBatchRecorders();
-                  return;
-                }
-                const normalized = normalizeRoomInput(
-                  addRoom,
-                  selectedPlatform
-                );
-                addNewRecorder(normalized.roomId, normalized.platform, "");
-                addModal = false;
-                addRoom = "";
-              }}
-            >
-              添加
-            </button>
-          </div>
+        </div>
+      </div>
+      <div class="shrink-0 px-6 py-4 border-t border-gray-200 dark:border-gray-700/50">
+        <div class="flex justify-end space-x-3">
+          <button
+            class="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 rounded-lg transition-colors"
+            on:click={() => {
+              addModal = false;
+            }}
+          >
+            取消
+          </button>
+          <button
+            class="px-4 py-2 bg-[#0A84FF] hover:bg-[#0A84FF]/90 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={!addValid}
+            on:click={() => {
+              if (batchMode) {
+                addBatchRecorders();
+                return;
+              }
+              const normalized = normalizeRoomInput(
+                addRoom,
+                selectedPlatform
+              );
+              addNewRecorder(normalized.roomId, normalized.platform, "");
+              addModal = false;
+              addRoom = "";
+            }}
+          >
+            添加
+          </button>
         </div>
       </div>
     </div>
