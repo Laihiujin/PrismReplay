@@ -166,7 +166,9 @@ optional = true
 [target.'cfg(windows)'.dependencies]
 whisper-rs = { version = "0.15.1", default-features = false }
 winreg = "0.52"
-windows-sys = { version = "0.52", features = ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.52", features = ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader"] }
+sha2 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(darwin)'.dependencies.whisper-rs]
 version = "0.15.1"

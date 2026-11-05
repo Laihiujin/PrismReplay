@@ -39,7 +39,6 @@ function Rename-And-MoveBundle {
         }
 
         if ($Debug) {
-            $newName = $newName -replace '\.msi$', '-debug.msi'
             $newName = $newName -replace '\.exe$', '-debug.exe'
         }
 
@@ -65,8 +64,7 @@ function Test-ReleaseBundleOutputs {
     )
 
     $patterns = @(
-        "LIVE-$Suffix*_x64-setup.exe",
-        "LIVE-$Suffix*_x64_en-US.msi"
+        "LIVE-$Suffix*_x64-setup.exe"
     )
 
     foreach ($pattern in $patterns) {
@@ -81,19 +79,24 @@ function Test-ReleaseBundleOutputs {
 
 $requireCudaBuild = $env:REQUIRE_CUDA_BUILD -eq "1"
 
-# CPU build
-Invoke-Yarn tauri build --features gui --config src-tauri/tauri.windows.cpu.conf.json
-Invoke-Yarn tauri build --debug --features gui --config src-tauri/tauri.windows.cpu.conf.json
+# CI publishes release installers only, so debug bundles would just double the build time.
+$buildDebug = -not $env:CI
 
-Rename-And-MoveBundle -BundlePath ./src-tauri/target/release/bundle/msi -Suffix "cpu" -ProductName "LIVE"
+# CPU build
+Invoke-Yarn tauri build --bundles nsis --features gui --config src-tauri/tauri.windows.cpu.conf.json
+if ($buildDebug) {
+    Invoke-Yarn tauri build --debug --bundles nsis --features gui --config src-tauri/tauri.windows.cpu.conf.json
+}
+
 Rename-And-MoveBundle -BundlePath ./src-tauri/target/release/bundle/nsis -Suffix "cpu" -ProductName "LIVE"
-Rename-And-MoveBundle -BundlePath ./src-tauri/target/debug/bundle/msi -Suffix "cpu" -ProductName "LIVE" -Debug
 Rename-And-MoveBundle -BundlePath ./src-tauri/target/debug/bundle/nsis -Suffix "cpu" -ProductName "LIVE" -Debug
 
 # CUDA build (override config)
 if (Test-CudaResources) {
-    Invoke-Yarn tauri build --features gui,cuda --config src-tauri/tauri.windows.cuda.conf.json
-    Invoke-Yarn tauri build --debug --features gui,cuda --config src-tauri/tauri.windows.cuda.conf.json
+    Invoke-Yarn tauri build --bundles nsis --features gui,cuda --config src-tauri/tauri.windows.cuda.conf.json
+    if ($buildDebug) {
+        Invoke-Yarn tauri build --debug --bundles nsis --features gui,cuda --config src-tauri/tauri.windows.cuda.conf.json
+    }
 } else {
     if ($requireCudaBuild) {
         throw "CUDA build required, but cudart/cublas runtime DLLs are missing from ./src-tauri."
@@ -101,9 +104,7 @@ if (Test-CudaResources) {
     Write-Host "Skip CUDA build: missing cudart/cublas DLLs in ./src-tauri" -ForegroundColor Yellow
 }
 
-Rename-And-MoveBundle -BundlePath ./src-tauri/target/release/bundle/msi -Suffix "cuda" -ProductName "LIVE"
 Rename-And-MoveBundle -BundlePath ./src-tauri/target/release/bundle/nsis -Suffix "cuda" -ProductName "LIVE"
-Rename-And-MoveBundle -BundlePath ./src-tauri/target/debug/bundle/msi -Suffix "cuda" -ProductName "LIVE" -Debug
 Rename-And-MoveBundle -BundlePath ./src-tauri/target/debug/bundle/nsis -Suffix "cuda" -ProductName "LIVE" -Debug
 
 if ($requireCudaBuild -and -not (Test-ReleaseBundleOutputs -Suffix "cuda")) {

@@ -4085,6 +4085,81 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4ce301924b7887e9d637144fdade93f9dfff9b60981d4ac161db09720d39aa5"
 
 [[package]]
+name = "live"
+version = "3.19.11"
+dependencies = [
+ "aead",
+ "aes-gcm",
+ "anyhow",
+ "async-ffmpeg-sidecar 0.0.1",
+ "async-std",
+ "async-trait",
+ "axum",
+ "base64 0.21.7",
+ "chrono",
+ "clap",
+ "danmu_stream",
+ "dashmap",
+ "deno_core",
+ "fix-path-env",
+ "futures",
+ "futures-core",
+ "hound",
+ "hyper 0.14.32",
+ "liblzma-sys",
+ "log",
+ "m3u8-rs 5.0.5",
+ "md5 0.7.0",
+ "mime_guess",
+ "pct-str 1.2.0",
+ "platform-dirs",
+ "rand 0.8.5",
+ "recorder",
+ "regex",
+ "reqwest 0.11.27",
+ "rusqlite",
+ "sanitize-filename",
+ "scraper",
+ "sentry",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "sha2",
+ "simplelog",
+ "socketioxide",
+ "sqlx",
+ "srtparse",
+ "sysinfo",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-deep-link",
+ "tauri-plugin-dialog",
+ "tauri-plugin-fs",
+ "tauri-plugin-http",
+ "tauri-plugin-notification",
+ "tauri-plugin-os",
+ "tauri-plugin-process",
+ "tauri-plugin-shell",
+ "tauri-plugin-single-instance",
+ "tauri-plugin-sql",
+ "tauri-utils",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-stream",
+ "tokio-tungstenite 0.27.0",
+ "tokio-util",
+ "toml 0.7.8",
+ "tower-http 0.5.2",
+ "url",
+ "urlencoding",
+ "uuid",
+ "whisper-rs",
+ "windows-sys 0.52.0",
+ "winreg 0.52.0",
+ "zip",
+]
+
+[[package]]
 name = "local-waker"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6814,79 +6889,6 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
  "digest 0.10.7",
-]
-
-[[package]]
-name = "live"
-version = "3.19.11"
-dependencies = [
- "aead",
- "aes-gcm",
- "anyhow",
- "async-ffmpeg-sidecar 0.0.1",
- "async-std",
- "async-trait",
- "axum",
- "base64 0.21.7",
- "chrono",
- "clap",
- "danmu_stream",
- "dashmap",
- "deno_core",
- "fix-path-env",
- "futures",
- "futures-core",
- "hound",
- "hyper 0.14.32",
- "liblzma-sys",
- "log",
- "m3u8-rs 5.0.5",
- "md5 0.7.0",
- "mime_guess",
- "pct-str 1.2.0",
- "platform-dirs",
- "rand 0.8.5",
- "recorder",
- "regex",
- "reqwest 0.11.27",
- "rusqlite",
- "sanitize-filename",
- "scraper",
- "sentry",
- "serde",
- "serde_derive",
- "serde_json",
- "simplelog",
- "socketioxide",
- "sqlx",
- "srtparse",
- "sysinfo",
- "tauri",
- "tauri-build",
- "tauri-plugin-deep-link",
- "tauri-plugin-dialog",
- "tauri-plugin-fs",
- "tauri-plugin-http",
- "tauri-plugin-notification",
- "tauri-plugin-os",
- "tauri-plugin-process",
- "tauri-plugin-shell",
- "tauri-plugin-single-instance",
- "tauri-plugin-sql",
- "tauri-utils",
- "thiserror 2.0.17",
- "tokio",
- "tokio-stream",
- "tokio-tungstenite 0.27.0",
- "tokio-util",
- "toml 0.7.8",
- "tower-http 0.5.2",
- "url",
- "urlencoding",
- "uuid",
- "whisper-rs",
- "windows-sys 0.52.0",
- "winreg 0.52.0",
 ]
 
 [[package]]
@@ -10336,6 +10338,33 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.104",
+]
+
+[[package]]
+name = "zip"
+version = "2.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1dcb24d0152526ae49b9b96c1dcf71850ca1e0b882e4e28ed898a93c41334744"
+dependencies = [
+ "arbitrary",
+ "crc32fast",
+ "crossbeam-utils",
+ "flate2",
+ "indexmap 2.10.0",
+ "memchr",
+ "zopfli",
+]
+
+[[package]]
+name = "zopfli"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f05cd8797d63865425ff89b5c4a48804f35ba0ce8d125800027ad6017d2b5249"
+dependencies = [
+ "bumpalo",
+ "crc32fast",
+ "log",
+ "simd-adler32",
 ]
 
 [[package]]

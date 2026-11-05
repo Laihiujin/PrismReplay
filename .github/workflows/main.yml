@@ -169,13 +169,59 @@ jobs:
           REQUIRE_CUDA_BUILD: "1"
         run: .\build.ps1
 
-      - name: Upload Windows packages artifact
+      - name: Test CUDA dependency validation
+        shell: powershell
+        run: .\scripts\tests\test_cuda_imports.ps1
+
+      - name: Check the CUDA build starts without cublas
+        shell: powershell
+        run: |
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $dumpbin = Get-ChildItem "$vsPath\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe |
+            Where-Object { $_.FullName -match 'Hostx64\\x64' } |
+            Select-Object -First 1
+          $dependents = (& $dumpbin.FullName /dependents src-tauri/target/release/LIVE.exe) -join "`n"
+          Write-Host $dependents
+          if ($LASTEXITCODE -ne 0) { throw 'dumpbin failed to inspect LIVE.exe.' }
+          . .\scripts\verify-cuda-imports.ps1
+          $null = Assert-CudaDelayImports -Dependents $dependents
+          $runtime = Get-ChildItem src-tauri -Filter 'cudart64*.dll' -File | Select-Object -First 1
+          if (-not $runtime) { throw 'CUDA runtime resource is missing.' }
+          .\scripts\test-cuda-startup.ps1 -Binary src-tauri/target/release/LIVE.exe -CudaRuntime $runtime.FullName
+
+      - name: Verify installed CPU and CUDA applications start
+        shell: powershell
+        run: |
+          foreach ($flavour in @('cpu', 'cuda')) {
+            $installer = Get-ChildItem src-tauri/target -Filter "LIVE-${flavour}_*_x64-setup.exe" -File | Select-Object -First 1
+            if (-not $installer) { throw "Missing $flavour installer." }
+            .\scripts\test-windows-installer.ps1 -Installer $installer.FullName
+          }
+
+      - name: Report package sizes
+        shell: powershell
+        run: |
+          $files = @(
+            Get-ChildItem src-tauri/target -Filter 'LIVE-*_x64-setup.exe'
+            Get-ChildItem src-tauri -Filter '*.exe' -File
+            Get-ChildItem src-tauri -Filter '*.dll' -File
+          )
+          $files |
+            Sort-Object Length -Descending |
+            ForEach-Object { '{0,9:N1} MiB  {1}' -f ($_.Length / 1MB), $_.Name }
+
+      - name: Upload CPU installer
         uses: actions/upload-artifact@v4
         with:
-          name: LIVE-windows-packages
-          path: |
-            src-tauri/target/LIVE-cpu_*_x64-setup.exe
-            src-tauri/target/LIVE-cpu_*_x64_en-US.msi
-            src-tauri/target/LIVE-cuda_*_x64-setup.exe
-            src-tauri/target/LIVE-cuda_*_x64_en-US.msi
+          name: LIVE-windows-cpu
+          path: src-tauri/target/LIVE-cpu_*_x64-setup.exe
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload CUDA installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: LIVE-windows-cuda
+          path: src-tauri/target/LIVE-cuda_*_x64-setup.exe
+          compression-level: 0
           if-no-files-found: error

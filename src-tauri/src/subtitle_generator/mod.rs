@@ -3,6 +3,8 @@ use std::path::Path;
 
 use crate::progress::progress_reporter::ProgressReporterTrait;
 
+#[cfg(all(target_os = "windows", feature = "cuda"))]
+pub mod cuda_runtime;
 pub mod powerlive;
 pub mod whisper_cpp;
 pub mod whisper_online;
