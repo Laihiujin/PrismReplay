@@ -1561,9 +1561,6 @@
                   placeholder="粘贴 m3u8 / flv / mp4 直链或单条资源 JSON"
                 ></textarea>
               </details>
-              <p class="text-xs text-gray-500 dark:text-gray-400">
-                请只录制您有权保存的内容。也兼容 wechatVideoDownload 的复制链接和 res-downloader 的资源 JSON。不支持分享页直解、加密短视频或弹幕。流结束或失败后自动停止，链接过期后需要重新抓取。
-              </p>
             {:else if batchMode}
               <textarea
                 id="room_id"

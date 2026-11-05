@@ -402,6 +402,7 @@
 
    </details>
 
+      {#if false}
       <details class="border-t border-gray-200 dark:border-gray-700 pt-2 space-y-1.5 text-xs" open>
         <summary class="cursor-pointer select-none font-medium text-gray-900 dark:text-white">
           跟踪视频号账号{#if monitor?.rooms.length}<span class="ml-1 font-normal text-gray-500">（{monitor.rooms.length} 个）</span>{/if}
@@ -451,6 +452,7 @@
         {/if}
         <p class="text-gray-500 dark:text-gray-400">每次读取都核对 @finder 账号标识，显示名只用来找到主页标签页。不会保存主页里的登录票据或带签名地址。</p>
       </details>
+      {/if}
 
     {#if error}
       <p class="text-xs text-red-600 dark:text-red-500">{error}</p>
