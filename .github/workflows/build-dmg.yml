@@ -69,6 +69,9 @@ jobs:
       - name: Install frontend dependencies
         run: yarn install --frozen-lockfile
 
+      - name: Verify native signing and DMG packaging
+        run: python3 scripts/tests/test_macos_native_signing.py --target aarch64-apple-darwin
+
       - name: Prepare macOS signing env
         shell: bash
         run: |
@@ -160,6 +163,9 @@ jobs:
 
       - name: Install frontend dependencies
         run: yarn install --frozen-lockfile
+
+      - name: Verify native signing and DMG packaging
+        run: python3 scripts/tests/test_macos_native_signing.py --target x86_64-apple-darwin
 
       - name: Prepare macOS signing env
         shell: bash

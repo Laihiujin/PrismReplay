@@ -858,9 +858,10 @@ pub async fn update_video_subtitle(
     let filepath = Path::new(state.config.read().await.output.as_str()).join(&video.file);
     let file = Path::new(&filepath);
     let subtitle_path = file.with_extension("srt");
-    if let Err(e) = std::fs::write(subtitle_path, subtitle) {
-        log::warn!("Update video subtitle error: {e}");
-    }
+    std::fs::write(&subtitle_path, subtitle).map_err(|e| {
+        log::error!("Update video subtitle error: {e}");
+        format!("写入字幕文件失败：{} ({e})", subtitle_path.display())
+    })?;
     Ok(())
 }
 
@@ -932,6 +933,26 @@ async fn encode_video_subtitle_inner(
 
     let output_filename =
         ffmpeg::encode_video_subtitle(reporter, &filepath, &subtitle_path, srt_style).await?;
+    let output_filepath = filepath.with_file_name(&output_filename);
+    let cover_path = filepath.with_extension("jpg");
+    let output_cover_path = output_filepath.with_extension("jpg");
+
+    if cover_path.exists() {
+        tokio::fs::copy(&cover_path, &output_cover_path)
+            .await
+            .map_err(|e| {
+                format!(
+                    "复制字幕视频封面失败: {} -> {}: {e}",
+                    cover_path.display(),
+                    output_cover_path.display()
+                )
+            })?;
+    } else {
+        log::warn!(
+            "Cover file not found for subtitle video: {}",
+            cover_path.display()
+        );
+    }
 
     let new_video = state
         .db

@@ -214,7 +214,7 @@ impl BiliRecorder {
                     Protocol::HttpHls,
                     Format::TS,
                     &[Codec::Avc, Codec::Hevc],
-                    Qn::Q4K,
+                    Qn::Q25000,
                 )
                 .await;
 

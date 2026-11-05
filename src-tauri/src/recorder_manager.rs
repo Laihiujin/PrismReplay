@@ -32,7 +32,7 @@ use recorder::UserInfo;
 use recorder::{CachePath, RecorderInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -268,6 +268,33 @@ impl From<RecorderManagerError> for String {
     }
 }
 
+/// Map an HLS request path (`platform/room_id/live_id/...`) to a file in `cache_dir`.
+///
+/// Every `/`-separated segment must be a single plain file name: `..`, `.`, empty
+/// segments, absolute paths and Windows prefixes or `\` separators are rejected,
+/// so the result can never escape `cache_dir`. Names made only of dots and spaces
+/// (`.. `, `...`) are rejected too, since Windows trims trailing dots and spaces
+/// and could read them as `..`.
+fn resolve_hls_path(cache_dir: &Path, path: &str) -> Option<PathBuf> {
+    let path = path.replace("%7C", "|");
+    let mut resolved = cache_dir.to_path_buf();
+    for segment in path.split('/') {
+        let mut components = Path::new(segment).components();
+        match (components.next(), components.next()) {
+            (Some(Component::Normal(name)), None)
+                if !name
+                    .to_string_lossy()
+                    .trim_end_matches([' ', '.'])
+                    .is_empty() =>
+            {
+                resolved.push(name)
+            }
+            _ => return None,
+        }
+    }
+    Some(resolved)
+}
+
 impl RecorderManager {
     pub fn new(
         #[cfg(not(feature = "headless"))] app_handle: AppHandle,
@@ -431,7 +458,15 @@ impl RecorderManager {
 
     async fn handle_events(&self) {
         let mut rx = self.event_tx.subscribe();
-        while let Ok(event) = rx.recv().await {
+        loop {
+            let event = match rx.recv().await {
+                Ok(event) => event,
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    log::warn!("Recorder event listener lagged; skipped {skipped} events");
+                    continue;
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            };
             match event {
                 RecorderEvent::LiveStart { recorder } => {
                     let event = events::new_webhook_event(
@@ -541,19 +576,26 @@ impl RecorderManager {
                         let _ = self.db.update_recorder(PlatformType::Wechat, &recorder.room_info.room_id, recorder.enabled).await;
                     }
                     log::info!("Record end: {recorder:?}");
+                    let live_id = recorder.live_id.clone();
+                    if live_id.is_empty() {
+                        log::warn!(
+                            "Ignoring record end without live id for room {}",
+                            recorder.room_info.room_id
+                        );
+                        continue;
+                    }
                     let event = events::new_webhook_event(
                         events::RECORD_ENDED,
                         Payload::Room(recorder.clone()),
                     );
                     let _ = self.webhook_poster.post_event(&event).await;
-                    let live_id = recorder.live_id.clone();
                     // check record in db, if length is 0, delete it
                     let room_id = recorder.room_info.room_id.clone();
                     let record = match self.db.get_record(&room_id, &live_id).await {
                         Ok(r) => r,
                         Err(e) => {
                             log::error!("Record not found in db: {recorder:?}, err={e:?}");
-                            return;
+                            continue;
                         }
                     };
                     if record.size == 0 {
@@ -1983,6 +2025,13 @@ impl RecorderManager {
                 err: "Invalid hls path".into(),
             });
         }
+        // Resolve before branching so room_id / live_id are vetted for playlists too.
+        let Some(file_path) = resolve_hls_path(Path::new(&cache_path), path) else {
+            log::warn!("Rejected request path outside the cache dir: {path}");
+            return Err(RecorderManagerError::HLSError {
+                err: "Invalid hls path".into(),
+            });
+        };
         // parse recorder type
         let platform = path_segs[0];
         // parse room id
@@ -2062,19 +2111,13 @@ impl RecorderManager {
             Ok(bytes)
         } else {
             // try to find requested ts file in recorder's cache
-            // cache files are stored in {cache_dir}/{room_id}/{timestamp}/{ts_file}
-            // remove path params
-            let path = path.split('?').next().unwrap_or(path);
-            let ts_file = format!("{}/{}", cache_path, path.replace("%7C", "|"));
-            let ts_file_content = tokio::fs::read(&ts_file).await;
-            if ts_file_content.is_err() {
-                log::warn!("Segment file not found: {ts_file}");
-                return Err(RecorderManagerError::HLSError {
+            // cache files are stored in {cache_dir}/{platform}/{room_id}/{live_id}/{ts_file}
+            tokio::fs::read(&file_path).await.map_err(|e| {
+                log::warn!("Failed to read segment file {}: {e}", file_path.display());
+                RecorderManagerError::HLSError {
                     err: "Segment file not found".into(),
-                });
-            }
-
-            Ok(ts_file_content.unwrap())
+                }
+            })
         }
     }
 
@@ -2257,5 +2300,34 @@ impl RecorderManager {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod hls_path_tests {
+    use super::*;
+
+    #[test]
+    fn resolves_segment_paths_inside_the_cache_dir() {
+        let cache = Path::new("cache");
+        assert_eq!(
+            resolve_hls_path(cache, "bilibili/1/2/some_dir/a%7Cb.ts"),
+            Some(cache.join("bilibili/1/2/some_dir/a|b.ts"))
+        );
+    }
+
+    #[test]
+    fn rejects_paths_that_could_leave_the_cache_dir() {
+        for path in [
+            "bilibili/1/2/../../../../secret.txt",
+            "bilibili/../2/segment.ts",
+            "bilibili/1/2/./segment.ts",
+            "bilibili/1//segment.ts",
+            "/etc/passwd",
+            "bilibili/1/2/.. ",
+            "bilibili/1/2/...",
+        ] {
+            assert_eq!(resolve_hls_path(Path::new("cache"), path), None, "{path}");
+        }
     }
 }
