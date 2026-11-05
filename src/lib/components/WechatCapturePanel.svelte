@@ -32,29 +32,36 @@
   let previews: Record<string, string> = {};
   let typedNames: Record<string, string> = {};
 
-  interface Monitor {
-    running: boolean;
+  interface TrackedRoom {
+    room_id: string;
     host: string;
     account_id: string;
-    interval_mins: number;
+    live_state: string;
     message: string;
     last_check_ms: number;
     last_change_ms: number;
-    live_state: string;
-    auto_record: boolean;
+  }
+  interface Monitor {
+    interval_mins: number;
+    checking: string | null;
+    rooms: TrackedRoom[];
   }
   let monitor: Monitor | null = null;
   let monitorHost = "";
   let monitorAccountId = "";
   let monitorMinutes = 5;
-  let monitorAutoRecord = false;
   let monitorTimer: ReturnType<typeof setInterval> | null = null;
+  let trackAdding = false;
+  let trackMessage = "";
+  // The tracker drives captures on its own while it checks a room.
+  $: trackerBusy = !!monitor?.checking;
+  $: alreadyTracked = !!monitorAccountId && !!monitor?.rooms.some((room) => room.account_id === monitorAccountId);
 
   async function refreshMonitor() {
     try {
+      const first = monitor === null;
       monitor = (await invoke("wechat_monitor_status")) as Monitor;
-      if (monitor.host && !monitorHost) monitorHost = monitor.host;
-      if (monitor.account_id && !monitorAccountId && monitor.host === monitorHost) monitorAccountId = monitor.account_id;
+      if (first) monitorMinutes = monitor.interval_mins;
     } catch (e) {
       monitor = null;
     }
@@ -62,32 +69,53 @@
 
   async function bindMonitorProfile() {
     error = "";
+    trackMessage = "";
     try {
       const target = await invoke("wechat_monitor_bind", { host: monitorHost }) as { host: string; account_id: string };
       monitorHost = target.host;
       monitorAccountId = target.account_id;
     } catch (e) { error = String(e); }
-    await refreshMonitor();
   }
 
-  async function startMonitor() {
+  async function addTrackedRoom() {
     error = "";
+    trackAdding = true;
     try {
-      await invoke("wechat_monitor_start", { host: monitorHost, accountId: monitorAccountId, intervalMins: Number(monitorMinutes), autoRecord: monitorAutoRecord });
+      await onAdd(JSON.stringify({ account_id: monitorAccountId, name: monitorHost.trim() }));
+      trackMessage = `已把“${monitorHost.trim()}”加入直播间列表，开播后会自动录制`;
+      monitorHost = "";
+      monitorAccountId = "";
+      await invoke("wechat_monitor_check_now");
     } catch (e) {
       error = String(e);
     }
+    trackAdding = false;
     await refreshMonitor();
   }
 
-  async function stopMonitor() {
+  async function saveInterval() {
     try {
-      await invoke("wechat_monitor_stop");
+      monitorMinutes = (await invoke("wechat_monitor_set_interval", { intervalMins: Number(monitorMinutes) })) as number;
     } catch (e) {
       error = String(e);
     }
-    await refreshMonitor();
   }
+
+  async function checkNow() {
+    try {
+      await invoke("wechat_monitor_check_now");
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  const stateLabels: Record<string, string> = {
+    live: "直播中",
+    recording: "录制中",
+    offline: "未开播",
+    stopped: "已关闭",
+    unknown: "无法确认",
+  };
 
   function loadPreviews(candidates: Candidate[]) {
     for (const candidate of candidates) {
@@ -202,7 +230,7 @@
       // Keep capturing only while the user may still add more streams; the
       // system proxy is restored once nothing is left to pick from.
       const others = visibleCandidates.filter((c) => c.url !== candidate.url && !added[c.url]);
-      if (others.length === 0 && status?.running && !monitor?.running) await run("wechat_capture_stop");
+      if (others.length === 0 && status?.running && !trackerBusy) await run("wechat_capture_stop");
       await onAdd(resourceFor(candidate));
       added[candidate.url] = true;
       if (previewing?.url === candidate.url) closePreview();
@@ -230,8 +258,8 @@
     refreshMonitor();
     monitorTimer = setInterval(() => {
       refreshMonitor();
-      // Monitoring starts captures on its own, so keep the capture state in view.
-      if (monitor?.running) refresh();
+      // The tracker starts captures on its own, so keep the capture state in view.
+      if (trackerBusy) refresh();
     }, 3000);
   });
   onDestroy(() => {
@@ -239,8 +267,8 @@
     if (monitorTimer) clearInterval(monitorTimer);
     closePreview();
     // Leaving this dialog must never leave the system proxy pointing at us.
-    // Monitoring keeps running in the background and manages its own capture.
-    if (status?.running && !monitor?.running) invoke("wechat_capture_stop").catch(() => {});
+    // The tracker keeps running in the background and manages its own capture.
+    if (status?.running && !trackerBusy) invoke("wechat_capture_stop").catch(() => {});
   });
 </script>
 
@@ -374,37 +402,54 @@
 
    </details>
 
-      <details class="border-t border-gray-200 dark:border-gray-700 pt-2 space-y-1.5 text-xs" open={monitor?.running}>
+      <details class="border-t border-gray-200 dark:border-gray-700 pt-2 space-y-1.5 text-xs" open>
         <summary class="cursor-pointer select-none font-medium text-gray-900 dark:text-white">
-          跟踪指定视频号{#if monitor?.running}<span class="ml-1 font-normal text-green-600 dark:text-green-400">监控中</span>{/if}
+          跟踪视频号账号{#if monitor?.rooms.length}<span class="ml-1 font-normal text-gray-500">（{monitor.rooms.length} 个）</span>{/if}
         </summary>
         <p>
-          先在电脑版微信打开本人视频号主页（不是搜索结果），填写显示名并点“绑定当前主页”。绑定后按主页账号 ID 检查状态，同名账号不会替代它。默认只监控，不抓包、不改系统代理；微信需保持主页可读，读取失败时显示“无法确认”。
+          把一个视频号账号加进直播间列表：它开播时自动进直播间抓流并录制，每场直播都会录。先在电脑版微信打开本人视频号主页（不是搜索结果），填写显示名并点“绑定当前主页”，再点“加入直播间列表”。之后请让每个账号的主页各自保持一个标签页开着。
         </p>
         <div class="flex items-center gap-2">
           <input class="min-w-0 flex-1 rounded bg-white dark:bg-[#2c2c2e] px-2 py-1 text-gray-900 dark:text-white"
-            placeholder="本人主页显示名，如 陈赫" bind:value={monitorHost} on:input={() => monitorAccountId = ""} disabled={monitor?.running} />
-          <button class="shrink-0 px-2 py-1 rounded-md bg-gray-200 dark:bg-gray-700 disabled:opacity-50" disabled={monitor?.running || !monitorHost.trim()} on:click={bindMonitorProfile}>绑定当前主页</button>
+            placeholder="本人主页显示名，如 陈赫" bind:value={monitorHost} on:input={() => { monitorAccountId = ""; trackMessage = ""; }} />
+          <button class="shrink-0 px-2 py-1 rounded-md bg-gray-200 dark:bg-gray-700 disabled:opacity-50" disabled={!monitorHost.trim()} on:click={bindMonitorProfile}>绑定当前主页</button>
+          <button class="shrink-0 px-3 py-1 rounded-md bg-blue-600 text-white disabled:opacity-50"
+            disabled={!monitorHost.trim() || !monitorAccountId || trackAdding || alreadyTracked}
+            on:click={addTrackedRoom}>{alreadyTracked ? "已在列表中" : trackAdding ? "添加中…" : "加入直播间列表"}</button>
+        </div>
+        {#if monitorAccountId}<p class="text-gray-500 dark:text-gray-400 break-all">已绑定账号：{monitorAccountId.slice(0, 12)}…{monitorAccountId.slice(-12)}</p>{/if}
+        {#if trackMessage}<p class="text-green-600 dark:text-green-400">{trackMessage}</p>{/if}
+        {#if !status.ca_installed}
+          <p class="text-amber-600 dark:text-amber-400">还没安装抓取证书：只能看到是否开播，不能自动录制。</p>
+        {/if}
+        <div class="flex items-center gap-2">
+          <span>每个账号每</span>
           <input class="w-14 rounded bg-white dark:bg-[#2c2c2e] px-2 py-1 text-gray-900 dark:text-white"
-            type="number" min="5" title="检查间隔（分钟），最少 5 分钟" bind:value={monitorMinutes} disabled={monitor?.running} />
-          <span>分钟</span>
-          {#if monitor?.running}
-            <button class="shrink-0 px-3 py-1 rounded-md text-gray-600 dark:text-gray-400 hover:underline" on:click={stopMonitor}>停止监控</button>
-          {:else}
-            <button class="shrink-0 px-3 py-1 rounded-md bg-blue-600 text-white disabled:opacity-50" disabled={!monitorHost.trim() || !monitorAccountId} on:click={startMonitor}>开始监控</button>
+            type="number" min="5" title="检查间隔（分钟），最少 5 分钟" bind:value={monitorMinutes} on:change={saveInterval} />
+          <span>分钟检查一次</span>
+          {#if monitor?.rooms.length}
+            <button class="ml-auto px-2 py-1 rounded-md text-gray-600 dark:text-gray-400 hover:underline" on:click={checkNow}>立即检查</button>
           {/if}
         </div>
-        <label class="flex items-center gap-2">
-          <input type="checkbox" bind:checked={monitorAutoRecord} disabled={monitor?.running || !status.ca_installed} />
-          开播后自动抓流录制（可选，需您先安装抓取证书）
-        </label>
-        <p class="text-gray-500 dark:text-gray-400">每次读取都核对已绑定的 @finder 账号标识，显示名只作为导航提示。不会保存主页里的登录票据或完整带签名地址。检查至少间隔 5 分钟。</p>
-        {#if monitorAccountId}<p class="text-gray-500 dark:text-gray-400 break-all">已绑定账号：{monitorAccountId.slice(0, 12)}…{monitorAccountId.slice(-12)}</p>{/if}
-        {#if monitor?.message}
-          <p class="text-gray-500 dark:text-gray-400">
-            {monitor.host}：{monitor.message}{monitor.last_check_ms ? `（${new Date(monitor.last_check_ms).toLocaleTimeString()}）` : ""}
-          </p>
+        {#if monitor?.rooms.length}
+          <ul class="space-y-1">
+            {#each monitor.rooms as room (room.room_id)}
+              <li class="rounded-md bg-white dark:bg-[#2c2c2e] px-2 py-1">
+                <div class="flex items-center gap-2">
+                  <span class="min-w-0 flex-1 truncate font-medium text-gray-900 dark:text-white">{room.host}</span>
+                  <span class={room.live_state === "live" || room.live_state === "recording" ? "text-red-600 dark:text-red-400" : "text-gray-500 dark:text-gray-400"}>
+                    {monitor.checking === room.room_id ? "检查中…" : stateLabels[room.live_state] ?? room.live_state}
+                  </span>
+                </div>
+                <div class="text-gray-500 dark:text-gray-400">
+                  {room.message}{room.last_check_ms ? `（${new Date(room.last_check_ms).toLocaleTimeString()}）` : ""}
+                </div>
+              </li>
+            {/each}
+          </ul>
+          <p class="text-gray-500 dark:text-gray-400">在直播间列表里关闭某个账号就不再检查它，删除它就停止跟踪。</p>
         {/if}
+        <p class="text-gray-500 dark:text-gray-400">每次读取都核对 @finder 账号标识，显示名只用来找到主页标签页。不会保存主页里的登录票据或带签名地址。</p>
       </details>
 
     {#if error}

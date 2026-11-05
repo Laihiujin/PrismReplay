@@ -1,20 +1,24 @@
-//! Watches one video-channel host through WeChat's own search page, which is the only place their
-//! live status is visible, and records them when they go live.
+//! Watches the video-channel accounts that are rooms in the room list, through each account's own
+//! profile page in WeChat, which is the only place their live status is visible. When one goes
+//! live, it opens the live room, captures the stream, and hands it to that room's recorder, so a
+//! tracked account records every broadcast like rooms on other platforms do.
 //!
-//! Everything goes through accessibility calls on a tab the user opened: the mouse is not moved and
-//! no WeChat API is called. Checks are spaced at least `MIN_INTERVAL_MINS` apart to stay gentle.
+//! Everything goes through accessibility calls on tabs the user opened: the mouse is not moved and
+//! no WeChat API is called. Each account is checked at most once every `MIN_INTERVAL_MINS`.
+use crate::recorder_manager::WechatTrackedRoom;
 use crate::state::State;
 use recorder::platforms::wechat::capture::{CaptureStatus, StreamCandidate, WechatCapture};
-use recorder::platforms::wechat::source::WechatSource;
-use recorder::platforms::PlatformType;
+use recorder::platforms::wechat::source::{valid_account_id, WechatSource};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
-use tokio::task::JoinHandle;
 
 const MIN_INTERVAL_MINS: u64 = 5;
 const STREAM_WAIT: Duration = Duration::from_secs(60);
 const QUALITY_SETTLE: Duration = Duration::from_secs(5);
+const TICK: Duration = Duration::from_secs(10);
 
 /// Prints one line: NOPAGE, or LIVE <item name> for each live result, or nothing if none is live.
 #[cfg(windows)]
@@ -74,16 +78,6 @@ fn parse_page_output(output: &str, host: &str) -> PageState {
 pub struct MonitorTarget {
     pub host: String,
     pub account_id: String,
-}
-
-fn valid_account_id(value: &str) -> bool {
-    value.len() <= 256
-        && value.strip_suffix("@finder").is_some_and(|prefix| {
-            !prefix.is_empty()
-                && prefix
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
-        })
 }
 
 fn parse_target_output(output: &str, expected_host: &str) -> Result<MonitorTarget, String> {
@@ -168,269 +162,291 @@ fn quality(candidate: &StreamCandidate) -> u32 {
         .unwrap_or(0)
 }
 
-/// Waits for the stream that opening the room produces, then takes the highest listed quality.
-async fn wait_for_stream(capture: &WechatCapture) -> Option<StreamCandidate> {
+/// Waits for a stream seen after `since_ms`, then takes the highest listed quality.
+async fn wait_for_stream(capture: &WechatCapture, since_ms: i64) -> Option<StreamCandidate> {
+    let fresh = |status: CaptureStatus| {
+        status
+            .candidates
+            .into_iter()
+            .filter(|candidate| candidate.seen_at_ms >= since_ms)
+            .collect::<Vec<_>>()
+    };
     let deadline = tokio::time::Instant::now() + STREAM_WAIT;
     while tokio::time::Instant::now() < deadline {
-        let status: CaptureStatus = capture.status().await.ok()?;
-        if !status.candidates.is_empty() {
+        if !fresh(capture.status().await.ok()?).is_empty() {
             tokio::time::sleep(QUALITY_SETTLE).await;
-            let status = capture.status().await.ok()?;
-            return status.candidates.into_iter().max_by_key(quality);
+            return fresh(capture.status().await.ok()?)
+                .into_iter()
+                .max_by_key(quality);
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
     None
 }
 
+/// What the tracker last saw for one tracked room.
 #[derive(Clone, Default, serde::Serialize)]
-pub struct MonitorStatus {
-    pub running: bool,
+pub struct RoomStatus {
+    pub room_id: String,
     pub host: String,
     pub account_id: String,
-    pub interval_mins: u64,
+    /// unknown, offline, live, recording or stopped.
+    pub live_state: String,
     pub message: String,
     pub last_check_ms: i64,
     pub last_change_ms: i64,
-    pub live_state: String,
-    pub auto_record: bool,
 }
 
-#[derive(Default)]
+#[derive(Clone, serde::Serialize)]
+pub struct MonitorStatus {
+    pub interval_mins: u64,
+    /// The room being checked right now.
+    pub checking: Option<String>,
+    pub rooms: Vec<RoomStatus>,
+}
+
 pub struct WechatMonitor {
-    status: Mutex<MonitorStatus>,
-    task: Mutex<Option<JoinHandle<()>>>,
+    interval_mins: AtomicU64,
+    rooms: Mutex<HashMap<String, RoomStatus>>,
+    checking: Mutex<Option<String>>,
+}
+
+impl Default for WechatMonitor {
+    fn default() -> Self {
+        Self {
+            interval_mins: AtomicU64::new(MIN_INTERVAL_MINS),
+            rooms: Mutex::default(),
+            checking: Mutex::default(),
+        }
+    }
 }
 
 impl WechatMonitor {
-    fn say_state(&self, state: &str, message: impl Into<String>) {
-        let mut status = self.status.lock().unwrap();
+    fn status(&self) -> MonitorStatus {
+        let mut rooms: Vec<_> = self.rooms.lock().unwrap().values().cloned().collect();
+        rooms.sort_by(|a, b| a.host.cmp(&b.host));
+        MonitorStatus {
+            interval_mins: self.interval_mins.load(Ordering::Relaxed),
+            checking: self.checking.lock().unwrap().clone(),
+            rooms,
+        }
+    }
+
+    /// Keeps one status per tracked room and returns a copy of each.
+    fn sync_rooms(&self, rooms: &[WechatTrackedRoom]) -> HashMap<String, RoomStatus> {
+        let mut statuses = self.rooms.lock().unwrap();
+        statuses.retain(|id, _| rooms.iter().any(|room| &room.room_id == id));
+        for room in rooms {
+            let status = statuses
+                .entry(room.room_id.clone())
+                .or_insert_with(|| RoomStatus {
+                    room_id: room.room_id.clone(),
+                    live_state: "unknown".into(),
+                    message: "等待第一次检查".into(),
+                    ..Default::default()
+                });
+            status.host = room.account.name.clone();
+            status.account_id = room.account.account_id.clone();
+        }
+        statuses.clone()
+    }
+
+    /// Records a state without counting it as a check, for rooms that are off or recording.
+    fn note(&self, room_id: &str, state: &str, message: impl Into<String>) {
+        self.update(room_id, state, message, false);
+    }
+
+    fn say(&self, room_id: &str, state: &str, message: impl Into<String>) {
+        self.update(room_id, state, message, true);
+    }
+
+    fn update(&self, room_id: &str, state: &str, message: impl Into<String>, checked: bool) {
+        let mut rooms = self.rooms.lock().unwrap();
+        let Some(status) = rooms.get_mut(room_id) else {
+            return;
+        };
         let now = chrono::Utc::now().timestamp_millis();
         if status.live_state != state {
             status.last_change_ms = now;
         }
         status.live_state = state.into();
         status.message = message.into();
-        status.last_check_ms = now;
+        if checked {
+            status.last_check_ms = now;
+        }
     }
 }
 
-/// Starts capture, opens the room, and adds the stream. Returns the new recorder's room ID.
-async fn record_live_room(
-    app: &AppHandle,
+/// Opens the account's live room with capture on and returns the stream it plays.
+async fn capture_stream(
     capture: &Arc<WechatCapture>,
     host: &str,
     account_id: &str,
     title: Option<String>,
-) -> Result<String, String> {
+) -> Result<WechatSource, String> {
+    // A capture the user started from the dialog is theirs to stop.
+    let was_running = capture.status().await?.running;
+    let since_ms = chrono::Utc::now().timestamp_millis();
     capture.start().await?;
     let entered = read_search_page(host, account_id, false, true).await;
     let stream = match entered {
-        Ok(PageState::Live { .. }) => wait_for_stream(capture).await,
+        Ok(PageState::Live { .. }) => wait_for_stream(capture, since_ms).await,
         _ => None,
     };
     // Always give the system proxy back before anything else can fail.
-    capture.stop().await?;
+    if !was_running {
+        capture.stop().await?;
+    }
     let stream = stream.ok_or("进入直播间后没有抓到直播流")?;
     let cover = super::wechat_capture::grab_frame(&stream.url).await.ok();
     let extra = serde_json::json!({
         "url": stream.url,
-        "title": title.unwrap_or_else(|| format!("{host}的直播")),
+        "title": stream.room_title.or(title).unwrap_or_else(|| format!("{host}的直播")),
         "name": host,
         "cover": cover,
         "captured_stream": true,
     })
     .to_string();
-    let room_id = WechatSource::parse(&extra)?.room_id();
-    let state = app.state::<State>();
-    crate::handlers::recorder::add_recorder(state, "wechat".to_string(), String::new(), extra)
-        .await
-        .map_err(|e| format!("添加录制失败：{e}"))?;
-    Ok(room_id)
+    WechatSource::parse(&extra)
 }
 
-async fn wait_until_recording_ends(app: &AppHandle, room_id: &str) {
-    loop {
-        tokio::time::sleep(Duration::from_secs(30)).await;
-        let state = app.state::<State>();
-        let info = state
-            .recorder_manager
-            .get_recorder_info(PlatformType::Wechat, room_id)
-            .await;
-        if !info.is_some_and(|info| info.recording) {
-            return;
-        }
-    }
-}
-
-async fn monitor_loop(
-    app: AppHandle,
-    monitor: Arc<WechatMonitor>,
-    host: String,
-    account_id: String,
-    interval: u64,
-    auto_record: bool,
+async fn check_room(
+    app: &AppHandle,
+    monitor: &WechatMonitor,
+    capture: &Arc<WechatCapture>,
+    room: &WechatTrackedRoom,
 ) {
-    let capture = app.state::<Arc<WechatCapture>>().inner().clone();
-    loop {
-        let page = read_search_page(&host, &account_id, true, false).await;
-        match page {
-            Ok(PageState::NoPage) => monitor.say_state(
-                "unknown",
-                format!("无法确认：请保持“{host}”本人主页打开；不会改为跟踪其他账号"),
-            ),
-            Ok(PageState::Unknown) => {
-                monitor.say_state("unknown", "无法确认：页面未完成读取或刷新，请检查微信窗口")
+    let host = &room.account.name;
+    let account_id = &room.account.account_id;
+    let id = room.room_id.as_str();
+    let manager = &app.state::<State>().recorder_manager;
+    let page = read_search_page(host, account_id, true, false).await;
+    if !matches!(page, Ok(PageState::Live { .. })) {
+        manager.set_wechat_live(id, false).await;
+    }
+    match page {
+        Ok(PageState::NoPage) => monitor.say(
+            id,
+            "unknown",
+            format!("无法确认：请在微信里保持“{host}”本人主页的标签页打开"),
+        ),
+        Ok(PageState::Unknown) => {
+            monitor.say(id, "unknown", "无法确认：页面未完成读取或刷新，请检查微信窗口")
+        }
+        Ok(PageState::AccountNotFound) => {
+            monitor.say(id, "unknown", "无法确认：当前页面不是这个账号的主页")
+        }
+        Ok(PageState::Ambiguous) => monitor.say(
+            id,
+            "unknown",
+            "无法确认：存在多个同名标签页，请在微信中只保留一个",
+        ),
+        Ok(PageState::Offline) => monitor.say(id, "offline", "未开播"),
+        Ok(PageState::Live { title }) => {
+            manager.set_wechat_live(id, true).await;
+            let ca_installed = capture
+                .status()
+                .await
+                .map(|status| status.ca_installed)
+                .unwrap_or(false);
+            if !ca_installed {
+                monitor.say(id, "live", "直播中；安装抓取证书后才能自动录制");
+                return;
             }
-            Ok(PageState::AccountNotFound) => {
-                monitor.say_state("unknown", "无法确认：当前页面不是已绑定的账号主页")
-            }
-            Ok(PageState::Ambiguous) => monitor.say_state(
-                "unknown",
-                "无法确认：存在多个同名结果，请在微信中核对目标账号",
-            ),
-            Ok(PageState::Offline) => {
-                monitor.say_state("offline", "已核对绑定的账号 ID，当前主页未检测到开播标记")
-            }
-            Ok(PageState::Live { title }) => {
-                monitor.say_state("live", "已检测到目标账号直播中");
-                if auto_record {
-                    monitor.say_state("live", "已开播，正在进入目标直播间并抓取…");
-                    match record_live_room(&app, &capture, &host, &account_id, title).await {
-                        Ok(room_id) => {
-                            monitor.say_state("recording", "正在录制目标直播间");
-                            wait_until_recording_ends(&app, &room_id).await;
-                            monitor.say_state(
-                                "unknown",
-                                "录制结束，请返回已绑定的账号主页以继续状态检查",
-                            );
-                        }
-                        Err(error) => {
-                            monitor.say_state("live", format!("已检测到开播，但没有录上：{error}"))
-                        }
+            monitor.say(id, "live", "已开播，正在进入直播间抓流…");
+            match capture_stream(capture, host, account_id, title).await {
+                Ok(source) => {
+                    if manager.offer_wechat_stream(id, source).await {
+                        monitor.say(id, "recording", "正在录制");
+                    } else {
+                        monitor.say(id, "live", "直播中，但这个直播间已关闭或正在录制");
                     }
                 }
+                Err(error) => monitor.say(id, "live", format!("直播中，但没有录上：{error}")),
             }
-            Err(error) => monitor.say_state("unknown", error),
         }
-        tokio::time::sleep(Duration::from_secs(interval * 60)).await;
+        Err(error) => monitor.say(id, "unknown", error),
     }
+}
+
+/// Runs for the life of the app. Checks are one at a time, since each one drives the WeChat window.
+async fn tracker_loop(app: AppHandle, monitor: Arc<WechatMonitor>) {
+    let capture = app.state::<Arc<WechatCapture>>().inner().clone();
+    loop {
+        let rooms = app
+            .state::<State>()
+            .recorder_manager
+            .wechat_tracked_rooms()
+            .await;
+        let statuses = monitor.sync_rooms(&rooms);
+        let interval_ms = monitor.interval_mins.load(Ordering::Relaxed) as i64 * 60_000;
+        for room in &rooms {
+            let status = &statuses[&room.room_id];
+            if !room.enabled {
+                monitor.note(&room.room_id, "stopped", "已关闭，不检查");
+                continue;
+            }
+            if room.recording {
+                monitor.note(&room.room_id, "recording", "正在录制");
+                continue;
+            }
+            let since_check = chrono::Utc::now().timestamp_millis() - status.last_check_ms;
+            // A stream that failed at once must not make the tracker reopen the room every tick.
+            let ended = status.live_state == "recording" && since_check >= 120_000;
+            let due = since_check >= interval_ms;
+            // A broadcast that just ended, or a room just turned back on, is checked right away.
+            if !(due || ended || status.live_state == "stopped") {
+                continue;
+            }
+            *monitor.checking.lock().unwrap() = Some(room.room_id.clone());
+            check_room(&app, &monitor, &capture, room).await;
+            *monitor.checking.lock().unwrap() = None;
+        }
+        tokio::time::sleep(TICK).await;
+    }
+}
+
+/// Starts watching tracked rooms. Call once, after the app state is ready.
+pub fn start_tracker(app: &AppHandle) {
+    let monitor = app.state::<Arc<WechatMonitor>>().inner().clone();
+    tauri::async_runtime::spawn(tracker_loop(app.clone(), monitor));
 }
 
 type MonitorState<'a> = tauri::State<'a, Arc<WechatMonitor>>;
 
 #[tauri::command]
 pub async fn wechat_monitor_status(monitor: MonitorState<'_>) -> Result<MonitorStatus, String> {
-    Ok(monitor.status.lock().unwrap().clone())
+    Ok(monitor.status())
 }
 
+/// Reads the account id from the profile page WeChat has open for `host`.
 #[tauri::command]
-pub async fn wechat_monitor_bind(
-    monitor: MonitorState<'_>,
-    host: String,
-) -> Result<MonitorTarget, String> {
+pub async fn wechat_monitor_bind(host: String) -> Result<MonitorTarget, String> {
     let host = host.trim();
     if host.is_empty() || host.chars().count() > 80 || host.chars().any(char::is_control) {
         return Err("请填写目标账号完整显示名".into());
     }
-    if monitor.status.lock().unwrap().running {
-        return Err("请先停止监控再更换绑定账号".into());
-    }
     let output = run_page_reader(host, "", false, false, true).await?;
-    let target = parse_target_output(&output, host)?;
-    let mut status = monitor.status.lock().unwrap();
-    if status.running {
-        return Err("监控已经启动，请先停止".into());
-    }
-    status.host = target.host.clone();
-    status.account_id = target.account_id.clone();
-    status.live_state = "unknown".into();
-    status.message = "已绑定本人主页账号 ID，尚未开始监控".into();
-    Ok(target)
+    parse_target_output(&output, host)
 }
 
 #[tauri::command]
-pub async fn wechat_monitor_start(
-    app: AppHandle,
+pub async fn wechat_monitor_set_interval(
     monitor: MonitorState<'_>,
-    host: String,
-    account_id: Option<String>,
     interval_mins: u64,
-    auto_record: Option<bool>,
-) -> Result<(), String> {
-    let host = host.trim().to_string();
-    if host.is_empty() || host.chars().count() > 80 || host.chars().any(char::is_control) {
-        return Err("请填写目标账号的完整显示名（1–80 字，不含控制字符）".into());
-    }
-    let account_id = account_id
-        .filter(|value| valid_account_id(value))
-        .ok_or_else(|| "请先绑定微信当前打开的本人主页".to_string())?;
-    {
-        let bound = monitor.status.lock().unwrap();
-        if bound.account_id != account_id || bound.host != host {
-            return Err("账号或名字已变化，请重新绑定本人主页".into());
-        }
-    }
-    let auto_record = auto_record.unwrap_or(false);
-    if auto_record {
-        let capture = app.state::<Arc<WechatCapture>>();
-        if !capture.status().await?.ca_installed {
-            return Err("自动录制需先由您确认安装抓取证书；仅状态监控不需要证书".into());
-        }
-    }
+) -> Result<u64, String> {
     let interval = interval_mins.clamp(MIN_INTERVAL_MINS, 1440);
-    let monitor = monitor.inner().clone();
-    let previous_auto_record = monitor.status.lock().unwrap().auto_record;
-    if let Some(task) = monitor.task.lock().unwrap().take() {
-        task.abort();
-    }
-    if previous_auto_record {
-        app.state::<Arc<WechatCapture>>().stop().await?;
-    }
-    *monitor.status.lock().unwrap() = MonitorStatus {
-        running: true,
-        host: host.clone(),
-        account_id: account_id.clone(),
-        interval_mins: interval,
-        message: "正在检查…".into(),
-        last_check_ms: 0,
-        last_change_ms: 0,
-        live_state: "unknown".into(),
-        auto_record,
-    };
-    let task = tokio::spawn(monitor_loop(
-        app,
-        monitor.clone(),
-        host,
-        account_id,
-        interval,
-        auto_record,
-    ));
-    *monitor.task.lock().unwrap() = Some(task);
-    Ok(())
+    monitor.interval_mins.store(interval, Ordering::Relaxed);
+    Ok(interval)
 }
 
+/// Checks every tracked room on the next pass instead of waiting out the interval.
 #[tauri::command]
-pub async fn wechat_monitor_stop(
-    monitor: MonitorState<'_>,
-    capture: tauri::State<'_, Arc<WechatCapture>>,
-) -> Result<(), String> {
-    if let Some(task) = monitor.task.lock().unwrap().take() {
-        task.abort();
+pub async fn wechat_monitor_check_now(monitor: MonitorState<'_>) -> Result<(), String> {
+    for status in monitor.rooms.lock().unwrap().values_mut() {
+        status.last_check_ms = 0;
     }
-    let auto_record = {
-        let mut status = monitor.status.lock().unwrap();
-        status.running = false;
-        status.live_state = "stopped".into();
-        status.message = "已停止".into();
-        status.auto_record
-    };
-    // A check aborted mid-capture must not leave the system proxy pointing at us.
-    if auto_record {
-        capture.stop().await
-    } else {
-        Ok(())
-    }
+    Ok(())
 }
 
 #[cfg(test)]
