@@ -183,7 +183,7 @@
 
     {#if !status.ca_installed}
       <p class="text-xs">
-        需要先安装本机生成的证书。它只能用于腾讯相关域名，其他网站的流量不会被解密。点击后 Windows 会弹出确认，请选“是”。
+        需要先安装本机生成的证书。它只能用于腾讯相关域名，其他网站的流量不会被解密。点击后系统会弹出确认（Windows 选“是”，macOS 输入密码或指纹）。
       </p>
       <button class="px-3 py-1.5 text-xs rounded-md bg-blue-600 text-white disabled:opacity-50" disabled={busy}
         on:click={() => run("wechat_capture_install_ca")}>安装证书</button>
