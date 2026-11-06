@@ -530,7 +530,7 @@ fn trust_store_contains(serial_hex: &str) -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn trust_store_contains(_serial_hex: &str) -> bool {
     false
 }
@@ -587,12 +587,31 @@ const PROXY_FLAG_PROXY: u32 = 0x2;
 const PROXY_FLAG_AUTO_URL: u32 = 0x4;
 
 /// The current user's proxy settings for the default connection, as Windows stores them.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProxySnapshot {
     pub flags: u32,
     pub server: Option<String>,
     pub bypass: Option<String>,
     pub auto_config_url: Option<String>,
+    /// macOS keeps proxies per network service; each one is recorded so that it is restored as it
+    /// was. Empty on Windows, and in the takeover value, which applies to every service.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<ServiceProxy>,
+}
+
+/// One macOS network service's web (HTTP) and secure web (HTTPS) proxies.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ServiceProxy {
+    pub service: String,
+    pub web: ProxyEndpoint,
+    pub secure: ProxyEndpoint,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProxyEndpoint {
+    pub enabled: bool,
+    pub host: String,
+    pub port: u16,
 }
 
 impl ProxySnapshot {
@@ -604,6 +623,16 @@ impl ProxySnapshot {
 pub trait ProxyStore: Send + Sync {
     fn read(&self) -> Result<ProxySnapshot, String>;
     fn write(&self, snapshot: &ProxySnapshot) -> Result<(), String>;
+
+    /// Puts `previous` back only where the proxy is still `ours`: another tool's later change is
+    /// left alone.
+    fn restore(&self, previous: &ProxySnapshot, ours: &str) -> Result<(), String> {
+        let current = self.read()?;
+        if current.enabled() && current.server.as_deref() == Some(ours) {
+            self.write(previous)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -634,6 +663,7 @@ fn take_over_proxy(store: &dyn ProxyStore, dir: &Path, port: u16) -> Result<Prox
         server: Some(ours),
         bypass: previous.bypass.clone(),
         auto_config_url: None,
+        services: Vec::new(),
     };
     if let Err(error) = store.write(&takeover) {
         let _ = restore_proxy(store, dir);
@@ -649,10 +679,7 @@ pub fn restore_proxy(store: &dyn ProxyStore, dir: &Path) -> Result<(), String> {
         return Ok(());
     };
     if let Ok(record) = serde_json::from_str::<RestoreRecord>(&text) {
-        let current = store.read()?;
-        if current.enabled() && current.server.as_deref() == Some(record.ours.as_str()) {
-            store.write(&record.previous)?;
-        }
+        store.restore(&record.previous, &record.ours)?;
     }
     std::fs::remove_file(&path).map_err(|e| format!("无法清除恢复记录：{e}"))
 }
@@ -722,6 +749,7 @@ impl ProxyStore for SystemProxyStore {
             server: take_string(1),
             bypass: take_string(2),
             auto_config_url: take_string(3),
+            services: Vec::new(),
         })
     }
 
@@ -793,8 +821,9 @@ impl ProxyStore for SystemProxyStore {
     }
 }
 
-/// Drives `networksetup` on the network service that is actually in use. The service's web and
-/// secure-web proxies are one setting to the user, so they are read and written together.
+/// Drives `networksetup`. macOS keeps proxies per network service and apps follow the primary
+/// service, which changes with Wi-Fi, Ethernet or a VPN, so the takeover applies to every enabled
+/// service and each one is recorded to be restored as it was.
 #[cfg(target_os = "macos")]
 pub struct SystemProxyStore;
 
@@ -816,89 +845,328 @@ fn networksetup(args: &[&str]) -> Result<String, String> {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn active_network_service() -> Result<String, String> {
-    let list = networksetup(&["-listallnetworkservices"])?;
-    for service in list.lines().skip(1).filter(|line| !line.starts_with('*')) {
-        let Ok(info) = networksetup(&["-getinfo", service]) else {
-            continue;
-        };
-        let has_ip = info.lines().any(|line| {
-            line.strip_prefix("IP address:")
-                .is_some_and(|value| value.trim().chars().next().is_some_and(|c| c.is_ascii_digit()))
-        });
-        if has_ip {
-            return Ok(service.to_string());
-        }
-    }
-    Err("找不到正在使用的网络连接，无法读取系统代理".into())
+/// `networksetup -listallnetworkservices`: a header line, then one service per line, with `*` in
+/// front of disabled ones.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn parse_network_services(text: &str) -> Vec<String> {
+    text.lines()
+        .skip(1)
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('*'))
+        .map(String::from)
+        .collect()
 }
 
-#[cfg(target_os = "macos")]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn field<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     text.lines()
         .find_map(|line| line.strip_prefix(name)?.strip_prefix(':'))
         .map(str::trim)
 }
 
+/// `networksetup -getwebproxy` / `-getsecurewebproxy` output.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn parse_endpoint(text: &str) -> ProxyEndpoint {
+    ProxyEndpoint {
+        enabled: field(text, "Enabled") == Some("Yes"),
+        host: field(text, "Server").unwrap_or_default().to_string(),
+        port: field(text, "Port").and_then(|port| port.parse().ok()).unwrap_or(0),
+    }
+}
+
+/// Summarises every service the way the shared takeover logic expects: the proxy counts as on when
+/// any service has one, and the server shown is the first one in use, preferring secure web.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn summarise_services(services: Vec<ServiceProxy>, auto_config_url: Option<String>) -> ProxySnapshot {
+    let in_use = services
+        .iter()
+        .flat_map(|service| [&service.secure, &service.web])
+        .find(|endpoint| endpoint.enabled && !endpoint.host.is_empty());
+    let mut flags = PROXY_FLAG_DIRECT;
+    if in_use.is_some() {
+        flags |= PROXY_FLAG_PROXY;
+    }
+    if auto_config_url.is_some() {
+        flags |= PROXY_FLAG_AUTO_URL;
+    }
+    ProxySnapshot {
+        flags,
+        server: in_use.map(|endpoint| format!("{}:{}", endpoint.host, endpoint.port)),
+        bypass: None,
+        auto_config_url,
+        services,
+    }
+}
+
+/// The HTTPS proxy apps actually use: the top level of `scutil --proxy`, which follows the primary
+/// service. Per-interface values under `__SCOPED__` are nested deeper and ignored, since ordinary
+/// connections do not read them.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn parse_effective_https_proxy(text: &str) -> Option<String> {
+    let mut values = HashMap::new();
+    for line in text.lines() {
+        // Top-level keys are indented by exactly two spaces; nested ones by more.
+        let Some(rest) = line.strip_prefix("  ") else {
+            continue;
+        };
+        if rest.starts_with(' ') {
+            continue;
+        }
+        let Some((key, value)) = rest.split_once(" : ") else {
+            continue;
+        };
+        values.insert(key.trim().to_string(), value.trim().to_string());
+    }
+    if values.get("HTTPSEnable").map(String::as_str) != Some("1") {
+        return None;
+    }
+    Some(format!("{}:{}", values.get("HTTPSProxy")?, values.get("HTTPSPort")?))
+}
+
+/// `host:port` as `networksetup` takes it.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn split_server(server: &str) -> Option<(String, u16)> {
+    let (host, port) = server.rsplit_once(':')?;
+    Some((host.to_string(), port.parse().ok()?))
+}
+
+/// Whether to put `recorded` back over `current`. With `ours`, only an endpoint that still points at
+/// our proxy is put back; one another tool changed since the takeover is left alone.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn endpoint_needs_restore(current: &ProxyEndpoint, recorded: &ProxyEndpoint, ours: Option<&str>) -> bool {
+    let still_ours = ours.is_none_or(|ours| {
+        current.enabled && format!("{}:{}", current.host, current.port) == ours
+    });
+    still_ours && current != recorded
+}
+
+#[cfg(target_os = "macos")]
+fn network_services() -> Result<Vec<String>, String> {
+    let services = parse_network_services(&networksetup(&["-listallnetworkservices"])?);
+    if services.is_empty() {
+        return Err("找不到可用的网络连接，无法读取系统代理".into());
+    }
+    Ok(services)
+}
+
+#[cfg(target_os = "macos")]
+fn read_service(service: &str) -> Result<ServiceProxy, String> {
+    Ok(ServiceProxy {
+        service: service.to_string(),
+        web: parse_endpoint(&networksetup(&["-getwebproxy", service])?),
+        secure: parse_endpoint(&networksetup(&["-getsecurewebproxy", service])?),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn write_endpoint(service: &str, kind: &str, endpoint: &ProxyEndpoint) -> Result<(), String> {
+    let set = format!("-set{kind}proxy");
+    if !endpoint.host.is_empty() && endpoint.port != 0 {
+        let port = endpoint.port.to_string();
+        networksetup(&[&set, service, &endpoint.host, &port])?;
+    } else if !endpoint.enabled {
+        // The service had no server before the takeover. Clearing it is cosmetic: a disabled
+        // proxy is never used, so a refusal is ignored.
+        let _ = networksetup(&[&set, service, "", "0"]);
+    }
+    let state = if endpoint.enabled { "on" } else { "off" };
+    networksetup(&[&format!("-set{kind}proxystate"), service, state])?;
+    Ok(())
+}
+
+/// What decides where traffic goes: which proxies are on, and their servers. A disabled proxy's
+/// leftover server is ignored.
+#[cfg(all(test, target_os = "macos"))]
+fn in_effect(endpoint: &ProxyEndpoint) -> Option<(String, u16)> {
+    endpoint
+        .enabled
+        .then(|| (endpoint.host.clone(), endpoint.port))
+}
+
+/// Puts one service back as recorded, endpoint by endpoint (see `endpoint_needs_restore`). A
+/// service removed since the takeover has nothing to restore.
+#[cfg(target_os = "macos")]
+fn restore_service(recorded: &ServiceProxy, ours: Option<&str>) -> Result<(), String> {
+    let Ok(current) = read_service(&recorded.service) else {
+        return Ok(());
+    };
+    if endpoint_needs_restore(&current.web, &recorded.web, ours) {
+        write_endpoint(&recorded.service, "web", &recorded.web)?;
+    }
+    if endpoint_needs_restore(&current.secure, &recorded.secure, ours) {
+        write_endpoint(&recorded.service, "secureweb", &recorded.secure)?;
+    }
+    Ok(())
+}
+
+/// Restores every service; one that fails does not stop the others.
+#[cfg(target_os = "macos")]
+fn restore_services(services: &[ServiceProxy], ours: Option<&str>) -> Result<(), String> {
+    let errors: Vec<String> = services
+        .iter()
+        .filter_map(|service| {
+            restore_service(service, ours)
+                .err()
+                .map(|error| format!("{}：{error}", service.service))
+        })
+        .collect();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("；"))
+    }
+}
+
 #[cfg(target_os = "macos")]
 impl ProxyStore for SystemProxyStore {
     fn read(&self) -> Result<ProxySnapshot, String> {
-        let service = active_network_service()?;
-        let web = networksetup(&["-getwebproxy", &service])?;
-        let secure = networksetup(&["-getsecurewebproxy", &service])?;
-        let auto = networksetup(&["-getautoproxyurl", &service])?;
-        let on = |text: &str| field(text, "Enabled") == Some("Yes");
-        let enabled = on(&web) || on(&secure);
-        let source = if on(&web) { &web } else { &secure };
-        let server = field(source, "Server")
-            .filter(|host| !host.is_empty())
-            .zip(field(source, "Port"))
-            .map(|(host, port)| format!("{host}:{port}"));
-        let bypass = networksetup(&["-getproxybypassdomains", &service])
-            .ok()
-            .map(|text| text.lines().map(str::trim).collect::<Vec<_>>().join(" "))
-            .filter(|text| !text.is_empty() && !text.contains("any"));
-        let mut flags = PROXY_FLAG_DIRECT;
-        if enabled {
-            flags |= PROXY_FLAG_PROXY;
+        let mut services = Vec::new();
+        let mut auto_config_url = None;
+        for service in network_services()? {
+            // Some services (for example a VPN without settings) cannot be queried; skip them.
+            let Ok(proxy) = read_service(&service) else {
+                continue;
+            };
+            if let Ok(auto) = networksetup(&["-getautoproxyurl", &service]) {
+                if field(&auto, "Enabled") == Some("Yes") && auto_config_url.is_none() {
+                    auto_config_url = Some(
+                        field(&auto, "URL")
+                            .filter(|url| *url != "(null)")
+                            .unwrap_or_default()
+                            .to_string(),
+                    );
+                }
+            }
+            services.push(proxy);
         }
-        let auto_config_url = field(&auto, "URL").filter(|url| *url != "(null)").map(String::from);
-        if on(&auto) {
-            flags |= PROXY_FLAG_AUTO_URL;
+        if services.is_empty() {
+            return Err("无法读取任何网络连接的系统代理".into());
         }
-        Ok(ProxySnapshot {
-            flags,
-            server: server.filter(|_| enabled),
-            bypass,
-            auto_config_url,
-        })
+        Ok(summarise_services(services, auto_config_url))
     }
 
+    /// Applies recorded services exactly; without them, sets the one server on every service.
     fn write(&self, snapshot: &ProxySnapshot) -> Result<(), String> {
-        let service = active_network_service()?;
-        if let Some(bypass) = snapshot.bypass.as_deref() {
-            let mut args = vec!["-setproxybypassdomains", service.as_str()];
-            args.extend(bypass.split_whitespace());
-            networksetup(&args)?;
+        if !snapshot.services.is_empty() {
+            return restore_services(&snapshot.services, None);
         }
-        match snapshot.server.as_deref().filter(|_| snapshot.enabled()) {
-            Some(server) => {
-                let (host, port) = server
-                    .rsplit_once(':')
-                    .ok_or_else(|| format!("代理地址格式不对：{server}"))?;
-                networksetup(&["-setwebproxy", &service, host, port])?;
-                networksetup(&["-setsecurewebproxy", &service, host, port])?;
-                networksetup(&["-setwebproxystate", &service, "on"])?;
-                networksetup(&["-setsecurewebproxystate", &service, "on"])?;
+        let services = network_services()?;
+        let Some(server) = snapshot.server.as_deref().filter(|_| snapshot.enabled()) else {
+            for service in &services {
+                let _ = networksetup(&["-setwebproxystate", service, "off"]);
+                let _ = networksetup(&["-setsecurewebproxystate", service, "off"]);
             }
-            None => {
-                networksetup(&["-setwebproxystate", &service, "off"])?;
-                networksetup(&["-setsecurewebproxystate", &service, "off"])?;
+            return Ok(());
+        };
+        let (host, port) =
+            split_server(server).ok_or_else(|| format!("代理地址格式不对：{server}"))?;
+        let endpoint = ProxyEndpoint {
+            enabled: true,
+            host,
+            port,
+        };
+        // A service that refuses (for example one managed by a VPN app) must not stop the others;
+        // whether the result is in effect is checked separately.
+        let mut last_error = None;
+        let mut applied = 0;
+        for service in &services {
+            let result = write_endpoint(service, "web", &endpoint)
+                .and_then(|_| write_endpoint(service, "secureweb", &endpoint));
+            match result {
+                Ok(()) => applied += 1,
+                Err(error) => last_error = Some(error),
             }
         }
-        Ok(())
+        match (applied, last_error) {
+            (0, Some(error)) => Err(error),
+            _ => Ok(()),
+        }
     }
+
+    /// Checked per service and per endpoint: the takeover touched every service, and another tool
+    /// may since have changed any one of them.
+    fn restore(&self, previous: &ProxySnapshot, ours: &str) -> Result<(), String> {
+        if !previous.services.is_empty() {
+            return restore_services(&previous.services, Some(ours));
+        }
+        // A record from a version that did not track services holds one server for all of them.
+        let endpoint = previous
+            .server
+            .as_deref()
+            .filter(|_| previous.enabled())
+            .and_then(split_server)
+            .map(|(host, port)| ProxyEndpoint {
+                enabled: true,
+                host,
+                port,
+            })
+            .unwrap_or_default();
+        let services: Vec<ServiceProxy> = network_services()?
+            .into_iter()
+            .map(|service| ServiceProxy {
+                service,
+                web: endpoint.clone(),
+                secure: endpoint.clone(),
+            })
+            .collect();
+        restore_services(&services, Some(ours))
+    }
+}
+
+/// The network interface of the default route, e.g. `en0` or a VPN's `utun3`.
+#[cfg(target_os = "macos")]
+fn default_route_interface() -> Option<String> {
+    let output = std::process::Command::new("route")
+        .args(["-n", "get", "default"])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("interface:"))
+        .map(|name| name.trim().to_string())
+}
+
+/// Waits for the takeover to become the proxy apps actually use. Tools that route traffic through
+/// a virtual interface (Quantumult X, Surge, Clash in enhanced/TUN mode, or any VPN) become the
+/// primary service, and its proxy settings win; capturing would then silently find nothing.
+#[cfg(target_os = "macos")]
+fn wait_until_proxy_effective(ours: &str) -> Result<(), String> {
+    for _ in 0..25 {
+        let effective = std::process::Command::new("scutil")
+            .arg("--proxy")
+            .output()
+            .ok()
+            .and_then(|output| parse_effective_https_proxy(&String::from_utf8_lossy(&output.stdout)));
+        if effective.as_deref() == Some(ours) {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let interface = default_route_interface().unwrap_or_default();
+    let virtual_interface = ["utun", "ipsec", "ppp", "tun", "tap"]
+        .iter()
+        .any(|prefix| interface.starts_with(prefix));
+    Err(if virtual_interface {
+        format!(
+            "系统代理没有生效：网络当前由虚拟网卡 {interface} 接管，多半是 Quantumult X、Surge、Clash 等工具的增强模式（TUN）或 VPN。请先关闭增强模式或断开 VPN 再开始抓取，原代理设置已恢复。"
+        )
+    } else {
+        "系统代理没有生效，可能被其他工具锁定，原代理设置已恢复。可以在“系统设置 → 网络 → 详细信息 → 代理”里检查。".to_string()
+    })
+}
+
+/// Takes over the system proxy and, on macOS, confirms that apps will actually use it.
+#[cfg(any(windows, target_os = "macos"))]
+fn take_over_and_confirm(dir: &Path, port: u16) -> Result<ProxySnapshot, String> {
+    let previous = take_over_proxy(&SystemProxyStore, dir, port)?;
+    #[cfg(target_os = "macos")]
+    if let Err(error) = wait_until_proxy_effective(&format!("127.0.0.1:{port}")) {
+        if let Err(restore_error) = restore_proxy(&SystemProxyStore, dir) {
+            return Err(format!("{error}（恢复失败：{restore_error}，请手动关闭系统代理）"));
+        }
+        return Err(error);
+    }
+    Ok(previous)
 }
 
 /// Run at startup: repairs the proxy if the previous run ended while capturing.
@@ -1143,7 +1411,14 @@ impl WechatCapture {
                 .build()
                 .map_err(|e| format!("无法启动本地代理：{e}"))?,
         );
-        let previous = match take_over_proxy(&SystemProxyStore, &self.dir, port) {
+        // `networksetup` runs one process per call and per network service, so keep it off the
+        // async workers.
+        let dir = self.dir.clone();
+        let takeover = tokio::task::spawn_blocking(move || take_over_and_confirm(&dir, port))
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|result| result);
+        let previous = match takeover {
             Ok(previous) => previous,
             Err(error) => {
                 let _ = shutdown.send(());
@@ -1206,7 +1481,13 @@ impl WechatCapture {
         };
         // Restore first: a stopped proxy with the setting still in place would cut off the network.
         #[cfg(any(windows, target_os = "macos"))]
-        let restored = restore_proxy(&SystemProxyStore, &self.dir);
+        let restored = {
+            let dir = self.dir.clone();
+            tokio::task::spawn_blocking(move || restore_proxy(&SystemProxyStore, &dir))
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|result| result)
+        };
         #[cfg(not(any(windows, target_os = "macos")))]
         let restored: Result<(), String> = Ok(());
         let _ = running.shutdown.send(());
@@ -1245,6 +1526,7 @@ mod tests {
                 server: server.map(str::to_string),
                 bypass: Some("<local>".into()),
                 auto_config_url: None,
+                services: Vec::new(),
             }))
         }
         fn get(&self) -> ProxySnapshot {
@@ -1333,6 +1615,7 @@ mod tests {
             server: Some("127.0.0.1:9999".into()),
             bypass: None,
             auto_config_url: None,
+            services: Vec::new(),
         };
         store.write(&other).unwrap();
         restore_proxy(&store, &dir).unwrap();
@@ -1365,6 +1648,151 @@ mod tests {
         let snapshot = SystemProxyStore.read().unwrap();
         println!("flags={:#x} server={:?}", snapshot.flags, snapshot.server);
         assert_ne!(snapshot.flags, 0);
+        assert!(!snapshot.services.is_empty());
+    }
+
+    #[test]
+    fn macos_service_list_skips_header_and_disabled_services() {
+        let text = "An asterisk (*) denotes that a network service is disabled.\nThunderbolt Bridge\nWi-Fi\n*Old VPN\nQuantumult X 2\n";
+        assert_eq!(
+            parse_network_services(text),
+            vec!["Thunderbolt Bridge", "Wi-Fi", "Quantumult X 2"]
+        );
+    }
+
+    #[test]
+    fn macos_endpoints_and_summary() {
+        let web = parse_endpoint("Enabled: No\nServer: 127.0.0.1\nPort: 18899\nAuthenticated Proxy Enabled: 0\n");
+        assert_eq!(
+            web,
+            ProxyEndpoint {
+                enabled: false,
+                host: "127.0.0.1".into(),
+                port: 18899
+            }
+        );
+        let off = summarise_services(
+            vec![ServiceProxy {
+                service: "Wi-Fi".into(),
+                web: web.clone(),
+                secure: web.clone(),
+            }],
+            None,
+        );
+        assert!(!off.enabled());
+        assert_eq!(off.server, None);
+        // Web and secure web may differ; both are kept for the restore, and HTTPS is shown.
+        let secure = parse_endpoint("Enabled: Yes\nServer: 10.0.0.2\nPort: 3128\n");
+        let on = summarise_services(
+            vec![
+                ServiceProxy {
+                    service: "Thunderbolt Bridge".into(),
+                    ..Default::default()
+                },
+                ServiceProxy {
+                    service: "Wi-Fi".into(),
+                    web: web.clone(),
+                    secure,
+                },
+            ],
+            Some(String::new()),
+        );
+        assert!(on.enabled());
+        assert_eq!(on.server.as_deref(), Some("10.0.0.2:3128"));
+        assert_ne!(on.flags & PROXY_FLAG_AUTO_URL, 0);
+        assert_eq!(on.services[1].web, web);
+        // Older restore records without per-service details still load.
+        let old: ProxySnapshot =
+            serde_json::from_str(r#"{"flags":1,"server":null,"bypass":null,"auto_config_url":null}"#)
+                .unwrap();
+        assert!(old.services.is_empty());
+    }
+
+    /// Captured from a Mac whose primary service is a TUN/VPN: the Wi-Fi proxy is listed only under
+    /// `__SCOPED__`, so apps do not use it.
+    const SCUTIL_VPN_PRIMARY: &str = "<dictionary> {\n  FTPPassive : 1\n  __SCOPED__ : <dictionary> {\n    en0 : <dictionary> {\n      ExceptionsList : <array> {\n        0 : *.local\n        1 : 169.254/16\n      }\n      FTPPassive : 1\n      HTTPEnable : 1\n      HTTPPort : 5555\n      HTTPProxy : 127.0.0.1\n      HTTPSEnable : 1\n      HTTPSPort : 5555\n      HTTPSProxy : 127.0.0.1\n    }\n    utun6 : <dictionary> {\n      FTPPassive : 1\n    }\n  }\n}\n";
+
+    const SCUTIL_IN_EFFECT: &str = "<dictionary> {\n  ExceptionsList : <array> {\n    0 : *.local\n    1 : 169.254/16\n  }\n  FTPPassive : 1\n  HTTPEnable : 1\n  HTTPPort : 5555\n  HTTPProxy : 127.0.0.1\n  HTTPSEnable : 1\n  HTTPSPort : 5555\n  HTTPSProxy : 127.0.0.1\n  __SCOPED__ : <dictionary> {\n    en0 : <dictionary> {\n      HTTPSEnable : 1\n      HTTPSPort : 7777\n      HTTPSProxy : 10.0.0.1\n    }\n  }\n}\n";
+
+    #[test]
+    fn only_the_global_https_proxy_counts_as_effective() {
+        assert_eq!(parse_effective_https_proxy(SCUTIL_VPN_PRIMARY), None);
+        assert_eq!(
+            parse_effective_https_proxy(SCUTIL_IN_EFFECT).as_deref(),
+            Some("127.0.0.1:5555")
+        );
+        assert_eq!(
+            parse_effective_https_proxy("<dictionary> {\n  HTTPSEnable : 0\n  HTTPSPort : 1\n  HTTPSProxy : x\n}\n"),
+            None
+        );
+        // Nested values never count, wherever the nested block appears.
+        let scoped_first = "<dictionary> {\n  __SCOPED__ : <dictionary> {\n    en0 : <dictionary> {\n      HTTPSEnable : 1\n      HTTPSPort : 7777\n      HTTPSProxy : 10.0.0.1\n    }\n  }\n  HTTPSEnable : 1\n  HTTPSPort : 5555\n  HTTPSProxy : 127.0.0.1\n}\n";
+        assert_eq!(
+            parse_effective_https_proxy(scoped_first).as_deref(),
+            Some("127.0.0.1:5555")
+        );
+    }
+
+    #[test]
+    fn only_endpoints_still_pointing_at_our_proxy_are_restored() {
+        let ours = ProxyEndpoint {
+            enabled: true,
+            host: "127.0.0.1".into(),
+            port: 5555,
+        };
+        let recorded = ProxyEndpoint {
+            enabled: false,
+            host: "127.0.0.1".into(),
+            port: 18899,
+        };
+        let other_tool = ProxyEndpoint {
+            enabled: true,
+            host: "127.0.0.1".into(),
+            port: 7890,
+        };
+        let switched_off = ProxyEndpoint {
+            enabled: false,
+            ..ours.clone()
+        };
+        let ours_text = Some("127.0.0.1:5555");
+        assert!(endpoint_needs_restore(&ours, &recorded, ours_text));
+        assert!(!endpoint_needs_restore(&other_tool, &recorded, ours_text));
+        assert!(!endpoint_needs_restore(&switched_off, &recorded, ours_text));
+        assert!(!endpoint_needs_restore(&recorded, &recorded, ours_text));
+        // Without `ours`, a recorded snapshot is applied as it is.
+        assert!(endpoint_needs_restore(&other_tool, &recorded, None));
+        assert!(!endpoint_needs_restore(&recorded, &recorded, None));
+        assert_eq!(split_server("127.0.0.1:5555"), Some(("127.0.0.1".to_string(), 5555)));
+        assert_eq!(split_server("127.0.0.1"), None);
+    }
+
+    /// Changes the real system proxy for about three seconds, then checks that every service is
+    /// back exactly as before. Run by hand: `cargo test -p recorder real_macos_takeover -- --ignored`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "Changes the real system proxy briefly"]
+    fn real_macos_takeover_is_confirmed_or_refused_and_always_restored() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dir = temp_dir();
+        let before = SystemProxyStore.read().unwrap();
+        let result = take_over_and_confirm(&dir, port);
+        println!("takeover: {:?}", result.as_ref().map(|_| "in effect"));
+        if result.is_ok() {
+            restore_proxy(&SystemProxyStore, &dir).unwrap();
+        }
+        assert!(!dir.join(RESTORE_FILE).exists());
+        let routing = |snapshot: &ProxySnapshot| -> Vec<_> {
+            snapshot
+                .services
+                .iter()
+                .map(|s| (s.service.clone(), in_effect(&s.web), in_effect(&s.secure)))
+                .collect()
+        };
+        let after = SystemProxyStore.read().unwrap();
+        assert_eq!(routing(&after), routing(&before));
+        assert_eq!(after.server, before.server);
+        assert_eq!(after.flags, before.flags);
     }
 
     #[test]
@@ -1607,9 +2035,8 @@ mod tests {
         let echo_addr = echo.local_addr().unwrap();
         tokio::spawn(async move {
             let (mut socket, _) = echo.accept().await.unwrap();
-            let mut buffer = [0; 64];
-            let read = socket.read(&mut buffer).await.unwrap();
-            socket.write_all(&buffer[..read]).await.unwrap();
+            let (mut reader, mut writer) = socket.split();
+            let _ = tokio::io::copy(&mut reader, &mut writer).await;
         });
         let mut client = tokio::net::TcpStream::connect(fixture.proxy_addr).await.unwrap();
         client
@@ -1620,8 +2047,10 @@ mod tests {
         let read = client.read(&mut buffer).await.unwrap();
         assert!(String::from_utf8_lossy(&buffer[..read]).contains("200"));
         client.write_all(b"opaque-bytes").await.unwrap();
-        let read = client.read(&mut buffer).await.unwrap();
-        assert_eq!(&buffer[..read], b"opaque-bytes");
+        // The tunnel may deliver the echo in several pieces.
+        let mut echoed = [0; 12];
+        client.read_exact(&mut echoed).await.unwrap();
+        assert_eq!(&echoed, b"opaque-bytes");
         let findings = fixture.shared.findings.lock().unwrap();
         assert!(findings.candidates.is_empty());
         assert!(findings.hosts.contains("127.0.0.1"));
